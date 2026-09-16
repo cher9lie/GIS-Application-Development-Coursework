@@ -1,0 +1,15 @@
+# Visual Studio 2010 build and user files
+[Bb]in/
+[Oo]bj/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Generated submission archives and temporary files
+*.zip
+*.tmp
+~$*
+
+# IDE metadata
+.vs/
