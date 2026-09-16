@@ -44,13 +44,21 @@ namespace GISDev5
 
             // 1. 设置 MXD 文件的路径
             // 请确认这个文件是你刚刚新建的、能打开的那个
-            string mxdPath = @"D:\Data\FireResponse.mxd";
+            string mxdPath = System.IO.Path.Combine(Application.StartupPath, "Data", "FireResponse.mxd");
 
             // 检查文件是否存在
             if (!System.IO.File.Exists(mxdPath))
             {
-                MessageBox.Show("找不到 MXD 文件！请检查路径：\n" + mxdPath);
-                return;
+                using (OpenFileDialog dialog = new OpenFileDialog())
+                {
+                    dialog.Title = "选择扑火跟踪实验的 MXD 文件";
+                    dialog.Filter = "ArcMap 文档 (*.mxd)|*.mxd";
+                    if (dialog.ShowDialog(this) != DialogResult.OK)
+                    {
+                        return;
+                    }
+                    mxdPath = dialog.FileName;
+                }
             }
 
             try
@@ -91,6 +99,18 @@ namespace GISDev5
                 }
             }
 
+            // 如果 MXD 中的数据源断开，尝试加载随项目提供的 FireLine.shp。
+            if (targetLayer == null)
+            {
+                string dataFolder = System.IO.Path.Combine(Application.StartupPath, "Data");
+                string sampleShapefile = System.IO.Path.Combine(dataFolder, "FireLine.shp");
+                if (System.IO.File.Exists(sampleShapefile))
+                {
+                    axMapControl1.AddShapeFile(dataFolder, "FireLine.shp");
+                    targetLayer = axMapControl1.get_Layer(0) as IFeatureLayer;
+                }
+            }
+
             // ========================================================
             // 4. 提取数据
             // ========================================================
@@ -125,6 +145,11 @@ namespace GISDev5
                 else
                 {
                     MessageBox.Show("图层 " + targetLayer.Name + " 里是空的，没有画线！");
+                }
+
+                if (System.Runtime.InteropServices.Marshal.IsComObject(cursor))
+                {
+                    System.Runtime.InteropServices.Marshal.ReleaseComObject(cursor);
                 }
             }
             else

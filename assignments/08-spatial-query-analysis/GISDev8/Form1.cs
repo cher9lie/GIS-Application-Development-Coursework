@@ -42,6 +42,12 @@ namespace GISDev8
                     return;
                 }
 
+                if (axMapControl1.LayerCount == 0)
+                {
+                    MessageBox.Show("请先加载 Shapefile 数据。");
+                    return;
+                }
+
                 // 1. 获取第一个图层（假设是村图层）
                 IFeatureLayer pFeatureLayer = axMapControl1.get_Layer(0) as IFeatureLayer;
                 if (pFeatureLayer == null) return;
@@ -50,7 +56,14 @@ namespace GISDev8
                 // 2. 定义查询过滤器 
                 IQueryFilter pQueryFilter = new QueryFilterClass();
                 // 注意：Shapefile中字符串字段通常需要单引号，如 NAME = '张村'
-                pQueryFilter.WhereClause = "NAME = '" + searchName + "'";
+                int nameFieldIndex = pFeatureClass.FindField("NAME");
+                if (nameFieldIndex < 0)
+                {
+                    MessageBox.Show("当前图层不存在 NAME 字段，请使用包含 NAME 字段的实验数据。");
+                    return;
+                }
+                string escapedName = searchName.Replace("'", "''");
+                pQueryFilter.WhereClause = "NAME = '" + escapedName + "'";
 
                 // 3. 执行选择 
                 IFeatureSelection pFeatureSelection = pFeatureLayer as IFeatureSelection;
@@ -85,6 +98,12 @@ namespace GISDev8
 
         private void btnSpatialSearch_Click(object sender, EventArgs e)
         {
+            if (axMapControl1.LayerCount == 0)
+            {
+                MessageBox.Show("请先加载 Shapefile 数据。");
+                return;
+            }
+
             // 1. 在地图上画一个矩形框（TrackRectangle）
             // 或者使用 TrackPolygon() 如实验书所示
             IEnvelope pEnvelope = axMapControl1.TrackRectangle();
@@ -100,6 +119,8 @@ namespace GISDev8
             IFeatureLayer pFeatureLayer = axMapControl1.get_Layer(0) as IFeatureLayer;
             if (pFeatureLayer == null) return;
 
+            IFeatureSelection spatialSelection = pFeatureLayer as IFeatureSelection;
+            spatialSelection.Clear();
             IFeatureCursor pFeatureCursor = pFeatureLayer.Search(pSpatialFilter, false);
             IFeature pFeature = pFeatureCursor.NextFeature();
 
@@ -125,6 +146,11 @@ namespace GISDev8
                 axMapControl1.Map.SelectFeature(pFeatureLayer, pFeature);
 
                 pFeature = pFeatureCursor.NextFeature();
+            }
+
+            if (Marshal.IsComObject(pFeatureCursor))
+            {
+                Marshal.ReleaseComObject(pFeatureCursor);
             }
 
             axMapControl1.ActiveView.Refresh(); // 刷新高亮
@@ -163,6 +189,12 @@ namespace GISDev8
         {
             try
             {
+                if (axMapControl1.LayerCount == 0)
+                {
+                    MessageBox.Show("请先加载 Shapefile 数据。");
+                    return;
+                }
+
                 IFeatureLayer pLayer = axMapControl1.get_Layer(0) as IFeatureLayer;
                 if (pLayer == null) return;
 
@@ -178,8 +210,19 @@ namespace GISDev8
                 IDataset pDataset = pLayer.FeatureClass as IDataset;
                 bufferTool.in_features = pDataset.Workspace.PathName + "\\" + pDataset.Name + ".shp";
 
-                // 设置输出路径
-                string outPath = @"c:\temp\buffer_result.shp"; // 请确保c:\temp存在，或者用SaveFileDialog获取路径
+                // 让用户选择输出位置，避免依赖固定目录。
+                string outPath;
+                using (SaveFileDialog saveDialog = new SaveFileDialog())
+                {
+                    saveDialog.Title = "保存缓冲区结果";
+                    saveDialog.Filter = "Shapefile (*.shp)|*.shp";
+                    saveDialog.FileName = "buffer_result.shp";
+                    if (saveDialog.ShowDialog(this) != DialogResult.OK)
+                    {
+                        return;
+                    }
+                    outPath = saveDialog.FileName;
+                }
                 bufferTool.out_feature_class = outPath;
 
                 // 设置缓冲距离 
@@ -191,7 +234,8 @@ namespace GISDev8
                 MessageBox.Show("缓冲区分析成功！");
 
                 // 将结果加载回地图
-                axMapControl1.AddShapeFile(@"c:\temp", "buffer_result.shp");
+                axMapControl1.AddShapeFile(System.IO.Path.GetDirectoryName(outPath),
+                    System.IO.Path.GetFileName(outPath));
             }
             catch (Exception ex)
             {

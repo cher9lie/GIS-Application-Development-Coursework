@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Globalization;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
@@ -169,6 +170,9 @@ public Form1()
         {
             OpenFileDialog dlg = new OpenFileDialog();
             dlg.Filter = "Raster Files (*.tif;*.img;*.jpg)|*.tif;*.img;*.jpg";
+            string sampleDataFolder = System.IO.Path.Combine(Application.StartupPath, "Data");
+            if (System.IO.Directory.Exists(sampleDataFolder))
+                dlg.InitialDirectory = sampleDataFolder;
             if (dlg.ShowDialog() == DialogResult.OK)
             {
                 try
@@ -312,7 +316,12 @@ public Form1()
                 if (input == null) return;
 
                 double interval;
-                if (!double.TryParse(txtContourInterval.Text, out interval)) return;
+                if ((!double.TryParse(txtContourInterval.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out interval) &&
+                     !double.TryParse(txtContourInterval.Text, out interval)) || interval <= 0)
+                {
+                    MessageBox.Show("等值线间距必须是大于 0 的数字。");
+                    return;
+                }
 
                 // =========================================================
                 // 【核心修复】虽然等值线是矢量，但设置环境能避免很多内部错误
@@ -339,7 +348,13 @@ public Form1()
         {
             try
             {
-                string val = txtExtractVal.Text;
+                double threshold;
+                if (!double.TryParse(txtExtractVal.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out threshold) &&
+                    !double.TryParse(txtExtractVal.Text, out threshold))
+                {
+                    MessageBox.Show("提取阈值必须是有效数字。");
+                    return;
+                }
 
                 IGeoDataset input = GetCurrentRaster();
                 if (input == null) return;
@@ -361,7 +376,7 @@ public Form1()
 
                 IRasterDescriptor descriptor = new RasterDescriptorClass();
                 IQueryFilter filter = new QueryFilterClass();
-                filter.WhereClause = "Value > " + val;
+                filter.WhereClause = "Value > " + threshold.ToString(CultureInfo.InvariantCulture);
                 descriptor.Create(input as IRaster, filter, "Value");
 
                 IGeoDataset output = m_ExtractionOp.Attribute(descriptor);
@@ -405,7 +420,7 @@ public Form1()
                     catch { }
                 }
 
-                AddResultToMap(output, "提取_大于" + val);
+                AddResultToMap(output, "提取_大于" + threshold.ToString(CultureInfo.InvariantCulture));
             }
             catch (Exception ex)
             {

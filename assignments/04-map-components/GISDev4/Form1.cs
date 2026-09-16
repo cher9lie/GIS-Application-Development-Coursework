@@ -164,15 +164,23 @@ switch (m_BasicOperationTool)
 
             // 3. 转换为要素选择接口
             IFeatureLayer pFeatureLayer = pLayer as IFeatureLayer;
-            if (pFeatureLayer == null) return; // 如果不是矢量图层就退出
+            if (pFeatureLayer == null || pFeatureLayer.FeatureClass == null) return; // 如果不是矢量图层就退出
 
+            IFeatureClass pFeatureClass = pFeatureLayer.FeatureClass;
             IFeatureSelection pFeatureSelection = pFeatureLayer as IFeatureSelection;
 
             // 4. 构建查询过滤器
             IQueryFilter pQuery = new QueryFilterClass();
             // 【注意】这里假设你的shp文件里有一个叫 "NAME" 的字段
             // 如果查询没反应，可能是字段名不对（比如叫 "Name" 或 "名称"）
-            pQuery.WhereClause = "NAME = '" + toolStripTextBox1.Text + "'";
+            int nameFieldIndex = pFeatureClass.FindField("NAME");
+            if (nameFieldIndex < 0)
+            {
+                MessageBox.Show("当前图层不存在 NAME 字段。");
+                return;
+            }
+            string queryName = toolStripTextBox1.Text.Trim().Replace("'", "''");
+            pQuery.WhereClause = "NAME = '" + queryName + "'";
 
             // 5. 执行选择 (高亮显示)
             // esriSelectionResultNew 表示创建一个新的选择集
@@ -344,7 +352,7 @@ switch (m_BasicOperationTool)
             return pDataTable;
         }
 
-        private void contextMenuStrip1_Opening(object sender, System.ComponentModel.CancelEventArgs e)
+        private void 打开属性表ToolStripMenuItem_Click(object sender, EventArgs e)
         {
             // _selectedLayer 是你在做“删除图层”时定义的全局变量
             // 用来记录右键到底点到了哪个图层

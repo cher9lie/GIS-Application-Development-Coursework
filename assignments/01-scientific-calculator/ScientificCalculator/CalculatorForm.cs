@@ -49,12 +49,14 @@ namespace ScientificCalculator
         {
             try
             {
-                if (txtDisplay.Text.Length >= MAX_DIGITS)
+                bool startsNewNumber = newNumberFlag || txtDisplay.Text == "0" || lastOperationWasEquals;
+                int digitCount = txtDisplay.Text.Replace("-", "").Replace(".", "").Length;
+                if (!startsNewNumber && digitCount >= MAX_DIGITS)
                 {
                     return; // 防止输入过长数字
                 }
 
-                if (newNumberFlag || txtDisplay.Text == "0" || lastOperationWasEquals)
+                if (startsNewNumber)
                 {
                     txtDisplay.Text = digit;
                     newNumberFlag = false;
@@ -268,12 +270,13 @@ namespace ScientificCalculator
                         result = Math.Cos(DegreesToRadians(input));
                         break;
                     case "tan":
-                        if (Math.Cos(DegreesToRadians(input)) == 0)
+                        double cosine = Math.Cos(DegreesToRadians(input));
+                        if (Math.Abs(cosine) < 1e-12)
                         {
                             HandleError("tan函数在此点未定义");
                             return;
                         }
-                        result = Math.Tan(DegreesToRadians(input));
+                        result = Math.Sin(DegreesToRadians(input)) / cosine;
                         break;
                     case "log":
                         if (input <= 0)
@@ -303,7 +306,14 @@ namespace ScientificCalculator
                         result = 1.0 / input;
                         break;
                     case "%":
-                        result = input / 100.0;
+                        if (operationPending && (currentOperation == "+" || currentOperation == "-"))
+                        {
+                            result = previousValue * input / 100.0;
+                        }
+                        else
+                        {
+                            result = input / 100.0;
+                        }
                         break;
                     default:
                         validFunction = false;
@@ -326,7 +336,6 @@ namespace ScientificCalculator
                     currentValue = result;
                     DisplayValue(result);
                     newNumberFlag = true;
-                    operationPending = false;
                     lastOperationWasEquals = false;
                 }
             }
@@ -525,7 +534,8 @@ namespace ScientificCalculator
 
         private void txtDisplay_KeyDown(object sender, KeyEventArgs e)
         {
-            ProcessKeyInput(e);
+            e.Handled = true;
+            e.SuppressKeyPress = true;
         }
 
         private void ProcessKeyInput(KeyEventArgs e)
@@ -605,6 +615,7 @@ namespace ScientificCalculator
                 }
 
                 e.Handled = true;
+                e.SuppressKeyPress = true;
             }
             catch (Exception)
             {

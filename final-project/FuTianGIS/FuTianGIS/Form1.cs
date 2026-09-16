@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Globalization;
 using System.Collections.Generic;
 using System.Windows.Forms.DataVisualization.Charting;
 using System.Runtime.InteropServices;
@@ -41,8 +42,6 @@ namespace FuTianGIS
         private bool _isAddingPoint = false;
         // 最近一次生成的缓冲几何，供功能 10 复用
         private IGeometry _lastBufferGeometry;
-        // ... 你已有的字段 ...
-        private string _lastStatsFieldName = null;
         // 统计窗口引用（选中变化时重用）
         private StatsChartForm _statsForm;
         private void ApplyUniqueValueRenderer(IFeatureLayer featureLayer, string fieldName)
@@ -252,20 +251,45 @@ namespace FuTianGIS
         {
             using (OpenFileDialog dlg = new OpenFileDialog())
             {
-                dlg.Title = "选择要加载的矢量数据";
-                dlg.Filter =
-                    "Shapefile (*.shp)|*.shp|" +
-                    "File GDB (*.gdb)|*.gdb|" +
-                    "Personal GDB (*.mdb)|*.mdb|" +
-                    "所有支持类型|*.shp;*.gdb;*.mdb";
-                dlg.CheckFileExists = true;
-                dlg.Multiselect = false;
+                string filePath;
+                DialogResult dataType = MessageBox.Show(
+                    "是否加载 File GDB 文件夹？\n\n选择“是”加载 .gdb 文件夹；选择“否”加载 Shapefile 或 Personal GDB。",
+                    "选择数据源类型",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
 
-                if (dlg.ShowDialog() != DialogResult.OK)
+                if (dataType == DialogResult.Yes)
+                {
+                    using (FolderBrowserDialog folderDialog = new FolderBrowserDialog())
+                    {
+                        folderDialog.Description = "选择 .gdb 文件夹";
+                        if (folderDialog.ShowDialog(this) != DialogResult.OK)
+                            return;
+                        filePath = folderDialog.SelectedPath;
+                    }
+                    if (!filePath.EndsWith(".gdb", StringComparison.OrdinalIgnoreCase))
+                    {
+                        MessageBox.Show("请选择扩展名为 .gdb 的文件夹。", "数据源无效",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+                else if (dataType == DialogResult.No)
+                {
+                    dlg.Title = "选择要加载的矢量数据";
+                    dlg.Filter = "Shapefile (*.shp)|*.shp|Personal GDB (*.mdb)|*.mdb";
+                    dlg.CheckFileExists = true;
+                    dlg.Multiselect = false;
+                    if (dlg.ShowDialog(this) != DialogResult.OK)
+                        return;
+                    filePath = dlg.FileName;
+                }
+                else
+                {
                     return;
+                }
 
-                string filePath = dlg.FileName;
-                string extension = System.IO.Path.GetExtension(filePath).ToLower();
+                string extension = System.IO.Path.GetExtension(filePath).ToLowerInvariant();
 
                 try
                 {
@@ -757,7 +781,7 @@ private void btnSearch_Click(object sender, EventArgs e)
         int fieldIndex = featureClass.FindField(displayField);
         if (fieldIndex == -1)
         {
-            MessageBox.Show("图层 '{featureLayer.Name}' 的显示字段 '{displayField}' 无效。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(string.Format("图层 '{0}' 的显示字段 '{1}' 无效。", featureLayer.Name, displayField), "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
@@ -768,12 +792,20 @@ private void btnSearch_Click(object sender, EventArgs e)
         IField field = featureClass.Fields.get_Field(fieldIndex);
         if (field.Type == esriFieldType.esriFieldTypeString)
         {
-            queryFilter.WhereClause = "{displayField} LIKE '%{searchText}%'";
+            string escapedText = searchText.Replace("'", "''");
+            queryFilter.WhereClause = displayField + " LIKE '%" + escapedText + "%'";
         }
         else
         {
-            // 如果是数值等其他类型，可能需要不同的查询方式，这里简化为精确匹配
-            queryFilter.WhereClause = "{displayField} = {searchText}"; 
+            double numericValue;
+            if (!double.TryParse(searchText, NumberStyles.Float, CultureInfo.InvariantCulture, out numericValue) &&
+                !double.TryParse(searchText, out numericValue))
+            {
+                MessageBox.Show("当前显示字段是数值字段，请输入有效数字。", "输入无效",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            queryFilter.WhereClause = displayField + " = " + numericValue.ToString(CultureInfo.InvariantCulture);
         }
 
         // 5. 执行选择
@@ -789,7 +821,28 @@ private void btnSearch_Click(object sender, EventArgs e)
         // 检查是否有要素被选中，并决定是否缩放
         if (featureSelection.SelectionSet.Count > 0)
         {
-             // 缩放至选中要素的代码... (您原来的代码可以放在这里)
+            IEnvelope selectionEnvelope = null;
+            IEnumIDs ids = featureSelection.SelectionSet.IDs;
+            int oid = ids.Next();
+            while (oid != -1)
+            {
+                IFeature selectedFeature = featureClass.GetFeature(oid);
+                if (selectedFeature != null && selectedFeature.Shape != null && !selectedFeature.Shape.IsEmpty)
+                {
+                    if (selectionEnvelope == null)
+                        selectionEnvelope = selectedFeature.Shape.Envelope;
+                    else
+                        selectionEnvelope.Union(selectedFeature.Shape.Envelope);
+                }
+                oid = ids.Next();
+            }
+
+            if (selectionEnvelope != null && !selectionEnvelope.IsEmpty)
+            {
+                selectionEnvelope.Expand(1.2, 1.2, true);
+                axMapControl1.ActiveView.Extent = selectionEnvelope;
+                axMapControl1.ActiveView.Refresh();
+            }
         }
         else
         {
