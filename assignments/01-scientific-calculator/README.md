@@ -67,6 +67,17 @@
 - 加减场景中的百分比语义不符合常见计算器
 - 一元函数执行后意外清除待完成的二元运算
 
+## 源码实现
+
+| 状态 | 用途 |
+| --- | --- |
+| `currentValue`、`previousValue` | 保存当前数值和二元运算的左操作数 |
+| `currentOperation`、`operationPending` | 保存尚待执行的运算及其状态 |
+| `newNumberFlag`、`lastOperationWasEquals` | 决定下一次数字输入是追加到显示还是开启一个新输入 |
+| `memoryValue`、`hasMemoryValue` | 独立维护存储值和内存是否已设置 |
+
+按键和数字按钮最终共用输入逻辑。跟踪 `InputNumber`、`PerformOperation` 和 `CalculateResult`，可以看到操作数如何从显示区进入状态，再经过求值回到显示区。一元函数从 `ApplyFunction` 进入，例如三角函数先把度转换为弧度，再调用 `Math`。显示和解析集中在 `DisplayValue`、`ParseDisplayValue`，键盘事件由 `ProcessKeyInput` 分发。调试时可输入 `2 + 3 =`，观察按下运算符、开始录入右操作数以及按等号后三个阶段的字段变化。
+
 ## 学习重点
 
 建议阅读 `CalculatorForm.cs` 中的几个状态变量：当前值、上一操作数、当前运算符、新数字标记和等号标记。这个作业的核心并不是公式本身，而是如何让按钮序列形成一致的计算状态机。

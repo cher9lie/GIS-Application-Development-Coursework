@@ -35,6 +35,19 @@
 
 仓库不附带本作业的默认 MXD，因此运行后需要自行准备可用的地图文档或数据。
 
+## 控件与地图对象
+
+```mermaid
+flowchart LR
+    P["Program：绑定运行时"] --> F["Form1：InitializeComponent"]
+    F --> L["AxLicenseControl：产品许可"]
+    F --> M["AxMapControl：地图与视图"]
+    T["AxToolbarControl：命令和工具"] -->|Buddy| M
+    C["AxTOCControl：图层目录"] -->|Buddy| M
+```
+
+图中 Buddy 表示工具条和目录都操作同一个地图控件。工具条用该控件作为操作目标，目录从它读取图层及图例。控件实例、Buddy 和工具项可从设计器配置追查，`OcxState` 则保存在资源文件中。将工具按钮按下后再点地图，可以区分一次性命令与需要随后接收地图鼠标输入的工具。
+
 ## 学习重点
 
 - MapControl 与 TOCControl 的伙伴控件关系

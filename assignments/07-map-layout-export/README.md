@@ -13,7 +13,7 @@
 - 解决方案：`GISDev7.sln`
 - 主要代码：`GISDev7/Form1.cs`
 
-程序优先获取 Engine 许可，随后尝试 EngineGeoDB 或 Advanced。运行前应确认至少一种许可可用。
+程序优先绑定 ArcGIS Engine，依次尝试 Engine 和 Engine GeoDB 许可。未安装 Engine 时绑定 Desktop，依次尝试 Basic、Standard 和 Advanced。产品许可不可用时，程序提示原因并退出。
 
 ## 已实现功能
 
@@ -48,6 +48,12 @@
 - 图名：创建 `TextElement` 放到点击位置。
 - 导出：根据保存对话框的格式创建 `ExportJPEGClass`、`ExportPDFClass` 或 `ExportTIFFClass`。
 - 打印：调用 `PrintPageLayout`，输出到当前默认打印机。
+
+## 版面编辑与导出的对象链
+
+`MapControl` 管地图内容和地图坐标范围，`PageLayoutControl` 管页面以及放在页面上的元素。切换标签时先看 `tabControl1_SelectedIndexChanged` 如何同步地图。图例、指北针、比例尺依赖地图框，标题走文本元素分支。可在 `axPageLayoutControl1_OnMouseDown` 处观察页面点击或拖框如何提供位置，再跟进 `AddLegend`、`AddNorthArrow`、`AddScaleBar` 和 `AddMapTitle`。
+
+导出从 `btnExport_Click` 进入，顺序为设置导出范围和分辨率、`StartExporting` 取得输出设备、调用 `IActiveView.Output`、完成导出并清理。排查导出缺少整饰时，先看传给 `Output` 的活动视图属于地图还是页面，再核对当前页签和导出范围。
 
 ## 数据与版面注意事项
 

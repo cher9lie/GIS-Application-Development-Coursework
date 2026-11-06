@@ -1891,9 +1891,7 @@ private void btnBuffer_Click(object sender, EventArgs e)
         {
             try
             {
-                if (_naContext != null)
-                    return true;
-
+                _naContext = null;
                 IMap map = axMapControl1.Map;
                 if (map == null || map.LayerCount == 0)
                 {
@@ -1909,9 +1907,10 @@ private void btnBuffer_Click(object sender, EventArgs e)
                 {
                     ILayer lyr = map.get_Layer(i);
 
-                    // 只要是 INALayer 就拿它的 Context
+                    // 只使用路线求解器的上下文，跳过服务区等其他网络分析图层。
                     INALayer naLayer = lyr as INALayer;
-                    if (naLayer != null && naLayer.Context != null)
+                    if (naLayer != null && naLayer.Context != null &&
+                        naLayer.Context.Solver is INARouteSolver)
                     {
                         foundContext = naLayer.Context;
                         break;
@@ -1942,6 +1941,74 @@ private void btnBuffer_Click(object sender, EventArgs e)
             }
         }
 
+        private IPoint PrepareStopPoint(IPoint mapPoint, IFeatureClass stops)
+        {
+            IPoint point = (IPoint)((IClone)mapPoint).Clone();
+            point.SpatialReference = axMapControl1.Map.SpatialReference;
+            ISpatialReference target = ((IGeoDataset)stops).SpatialReference;
+            if (point.SpatialReference == null || point.SpatialReference is IUnknownCoordinateSystem ||
+                target == null || target is IUnknownCoordinateSystem)
+                throw new InvalidOperationException("请先为地图和网络数据定义坐标系。");
+
+            point.Project(target);
+            return point;
+        }
+
+        private static INALocation LocateStop(INALocator locator, IPoint point, string label)
+        {
+            INALocation location = new NALocationClass();
+            IPoint snappedPoint = new PointClass();
+            double distance = 0;
+            locator.QueryLocationByPoint(point, ref location, ref snappedPoint, ref distance);
+            if (location == null || !location.IsLocated)
+                throw new InvalidOperationException(label + "未能定位到道路网络。请在道路附近重新选点，并检查路线图层的搜索容差。");
+
+            return location;
+        }
+
+        private static void StoreStop(IFeatureClass stops, IPoint point, INALocation location, int sequence)
+        {
+            IFeature stop = stops.CreateFeature();
+            try
+            {
+                ((IRowSubtypes)stop).InitDefaultValues();
+                stop.Shape = point;
+                stop.set_Value(stops.FindField("RouteName"), "Route1");
+                stop.set_Value(stops.FindField("Sequence"), sequence);
+                ((INALocationObject)stop).NALocation = location;
+                stop.Store();
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(stop);
+            }
+        }
+
+        private static IGeometry ReadRouteShape(IFeatureClass routes)
+        {
+            IFeatureCursor cursor = routes.Search(null, true);
+            try
+            {
+                IFeature route = cursor.NextFeature();
+                return route == null ? null : route.ShapeCopy;
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(cursor);
+            }
+        }
+
+        private static string RouteMessageDetails(IGPMessages messages)
+        {
+            StringBuilder details = new StringBuilder();
+            for (int i = 0; i < messages.Count; i++)
+            {
+                details.AppendLine();
+                details.Append(messages.GetMessage(i).Description);
+            }
+            return details.ToString();
+        }
+
         private void SolveRoute()
         {
 
@@ -1960,125 +2027,73 @@ private void btnBuffer_Click(object sender, EventArgs e)
                     return;
                 }
 
-                // 1. 获取 Stops 和 Routes NAClass
-                INAClass stopsNAClass = _naContext.NAClasses.get_ItemByName("Stops") as INAClass;
-                INAClass routesNAClass = _naContext.NAClasses.get_ItemByName("Routes") as INAClass;
-                if (stopsNAClass == null || routesNAClass == null)
-                {
-                    MessageBox.Show("在 NAContext 中未找到 \"Stops\" 或 \"Routes\" 类，请检查网络图层配置。", "路径分析",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
+                IFeatureClass stops = _naContext.NAClasses.get_ItemByName("Stops") as IFeatureClass;
+                IFeatureClass routes = _naContext.NAClasses.get_ItemByName("Routes") as IFeatureClass;
+                if (stops == null || routes == null)
+                    throw new InvalidOperationException("路线分析图层缺少 Stops 或 Routes 要素类。");
 
-                // （可选）调试：确认拿到的 NAClass 名称
+                INAContextEdit contextEdit = (INAContextEdit)_naContext;
+                contextEdit.ClearOutputNAObjects();
+                axMapControl1.ActiveView.PartialRefresh(esriViewDrawPhase.esriViewGeography, null, null);
+
+                INALocator locator = _naContext.Locator;
+                if (locator == null)
+                    throw new InvalidOperationException("路线分析图层缺少网络定位器。");
+
+                IPoint start = PrepareStopPoint(_routeStartPoint, stops);
+                IPoint end = PrepareStopPoint(_routeEndPoint, stops);
+                INALocation startLocation = LocateStop(locator, start, "起点");
+                INALocation endLocation = LocateStop(locator, end, "终点");
+
+                // 两个点均可定位后，再替换路线图层中的旧停靠点。
+                ITable stopsTable = (ITable)stops;
+                contextEdit.StartEditOperation();
                 try
                 {
-                    string stopsName = stopsNAClass.ClassDefinition.Name;
-                    string routesName = routesNAClass.ClassDefinition.Name;
-                    MessageBox.Show(
-                        "调试：获取到 NAClass\nStops = " + stopsName + "\nRoutes = " + routesName,
-                        "路径分析调试");
+                    stopsTable.DeleteSearchedRows(null);
+                    StoreStop(stops, start, startLocation, 1);
+                    StoreStop(stops, end, endLocation, 2);
+                    contextEdit.StopEditOperation();
                 }
-                catch { }
-
-                // 2. 通过 ITable 接口操作 NAClass
-                ITable stopsTable = stopsNAClass as ITable;
-                ITable routesTable = routesNAClass as ITable;
-                if (stopsTable == null || routesTable == null)
+                catch
                 {
-                    MessageBox.Show("NAClass 未能转换为 ITable 接口。", "路径分析",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    contextEdit.AbortEditOperation();
+                    throw;
+                }
+                contextEdit.ContextChanged();
+
+                IGPMessages messages = new GPMessagesClass();
+                bool partial;
+                try
+                {
+                    partial = _naContext.Solver.Solve(_naContext, messages, null);
+                }
+                catch (COMException ex)
+                {
+                    contextEdit.ClearOutputNAObjects();
+                    throw new InvalidOperationException(ex.Message + RouteMessageDetails(messages), ex);
+                }
+
+                esriGPMessageSeverity severity = messages.MaxSeverity;
+                if (partial || severity == esriGPMessageSeverity.esriGPMessageSeverityError ||
+                    severity == esriGPMessageSeverity.esriGPMessageSeverityAbort)
+                {
+                    contextEdit.ClearOutputNAObjects();
+                    axMapControl1.ActiveView.PartialRefresh(esriViewDrawPhase.esriViewGeography, null, null);
+                    string summary = partial ? "仅获得部分路线，未能连通起点和终点。" : "路线求解失败或已取消。";
+                    MessageBox.Show(summary + RouteMessageDetails(messages), "路径分析",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
 
-                // 2.1 清空 Stops 表旧记录
-                // 使用 DeleteSearchedRows 可以一次性删除 Search 出来的所有行
-                IQueryFilter deleteFilter = new QueryFilterClass();
-                deleteFilter.WhereClause = "1=1";
-                stopsTable.DeleteSearchedRows(deleteFilter);
-
-                // 3. 向 Stops 中添加起点和终点
-                int shapeIndex = stopsTable.FindField("Shape");
-                if (shapeIndex < 0)
-                {
-                    MessageBox.Show("Stops 表中未找到 Shape 字段。", "路径分析",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                // 这两个字段在你的 Stops 表里是存在的
-                int routeNameIndex = stopsTable.FindField("RouteName");   // 路线名
-                int sequenceIndex = stopsTable.FindField("Sequence");    // 停靠点顺序
-
-                string routeNameValue = "Route1";   // 任意非空字符串即可，与你的场景无关
-
-                // 起点（序号 1）
-                IRow fromRow = stopsTable.CreateRow();
-                fromRow.set_Value(shapeIndex, _routeStartPoint);
-
-                if (routeNameIndex >= 0)
-                    fromRow.set_Value(routeNameIndex, routeNameValue);
-                if (sequenceIndex >= 0)
-                    fromRow.set_Value(sequenceIndex, 1);   // 起点 Sequence = 1
-
-                fromRow.Store();
-
-                // 终点（序号 2）
-                IRow toRow = stopsTable.CreateRow();
-                toRow.set_Value(shapeIndex, _routeEndPoint);
-
-                if (routeNameIndex >= 0)
-                    toRow.set_Value(routeNameIndex, routeNameValue);
-                if (sequenceIndex >= 0)
-                    toRow.set_Value(sequenceIndex, 2);     // 终点 Sequence = 2
-
-                toRow.Store();
-
-                // ★ 在调用 Solve 之前，加 RowCount 调试
-                int stopCount = stopsTable.RowCount(null);
-                MessageBox.Show("调试：当前 Stops 表中记录数 = " + stopCount,
-                    "路径分析调试");
-
-                // 4. 求解路径
-                INASolver solver = _naContext.Solver;
-                if (solver == null)
-                {
-                    MessageBox.Show("NAContext 中的 Solver 为空。", "路径分析",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                // 这里先不再设置搜索容差，使用 Network Dataset 的默认配置
-                IGPMessages gpMessages = new GPMessagesClass();
-                solver.Solve(_naContext, gpMessages, null);
-
-                // 如果 Solve 抛异常会直接到 catch，这里暂不解析 gpMessages
-
-                // 5. 从 Routes 表读取路径几何
-                int routeShapeIndex = routesTable.FindField("Shape");
-                if (routeShapeIndex < 0)
-                {
-                    MessageBox.Show("Routes 表中未找到 Shape 字段。", "路径分析",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                ICursor routeCursor = routesTable.Search(null, false);
-                IRow routeRow = routeCursor.NextRow();
-                if (routeRow == null)
-                {
-                    MessageBox.Show("没有求得路径结果。", "路径分析",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
-
-                IGeometry routeGeom = routeRow.get_Value(routeShapeIndex) as IGeometry;
+                IGeometry routeGeom = ReadRouteShape(routes);
                 if (routeGeom == null || routeGeom.IsEmpty)
-                {
-                    MessageBox.Show("路径结果几何为空。", "路径分析",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
+                    throw new InvalidOperationException("没有可绘制的路径结果。" + RouteMessageDetails(messages));
+                routeGeom.Project(axMapControl1.Map.SpatialReference);
+
+                if (severity == esriGPMessageSeverity.esriGPMessageSeverityWarning)
+                    MessageBox.Show("路线已求得，但求解器返回警告。" + RouteMessageDetails(messages), "路径分析",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
                 // 6. 在地图上绘制路径
                 IMap map = axMapControl1.Map;

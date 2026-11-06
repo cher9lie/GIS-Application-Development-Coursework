@@ -49,6 +49,24 @@ C:\Windows\Microsoft.NET\Framework\v4.0.30319\MSBuild.exe 项目.sln /t:Rebuild 
 
 本次整理已经用上述 MSBuild 对 10 个解决方案逐一进行 `Release | x86` 重建，均编译通过。作业 2、3、8 可能出现 CS1762 互操作引用警告，这是 ArcGIS 10.2 与旧式 COM 程序集组合时的常见现象，本次构建不受影响。
 
+## 按源码理解课程设计
+
+课程的主线是把 WinForms 事件接到 ArcObjects 对象上。作业 1 练习事件与状态管理，作业 2–4 逐步搭建地图界面，作业 5–8 在地图上加入几何、渲染、版面和矢量分析，作业 9 处理栅格。期末项目把这些操作放进同一个主窗体，并接入道路网络求解。
+
+```mermaid
+flowchart LR
+    A["按钮、鼠标和计时器"] --> B["WinForms 事件处理器"]
+    B --> C["地图、图层与活动视图"]
+    B --> D["几何、查询与分析接口"]
+    D --> E["要素、栅格或网络分析结果"]
+    E --> C
+    C --> F["重绘、统计窗口或导出"]
+```
+
+读 GIS 项目时先看 `Program.cs` 的运行时绑定和许可，再在 `Form1.Designer.cs` 找到控件与事件的连接，最后到 `Form1.cs` 顺着事件处理器读输入、处理与输出。活动视图中的临时标记、图层选择集、数据源里的已保存要素是不同层次的状态，适合在作业 4、8 和期末项目里对照观察。
+
+接口资料优先使用 Esri 归档的 [ArcObjects .NET 10 RuntimeManager 文档](https://resources.arcgis.com/en/help/arcobjects-net/componentHelp/0046/00460000002w000000.htm)、[ArcGIS Engine 控件文档](https://resources.arcgis.com/en/help/arcobjects-net/componentHelp/0016/001600000411000000.htm)和 [ArcObjects .NET 10.1 库参考](https://resources.arcgis.com/en/help/arcobjects-net/componentHelp/0025/00250000083n000000.htm)。旧页面的版本标签随归档来源变化，项目的编译目标仍以各工程中的 10.2 引用为准。
+
 ## ArcObjects 引用异常时怎么处理
 
 如果 Visual Studio 中出现黄色感叹号、找不到 `ESRI.ArcGIS.*` 或窗体设计器打不开，可依次检查：
@@ -79,6 +97,18 @@ C:\Windows\Microsoft.NET\Framework\v4.0.30319\MSBuild.exe 项目.sln /t:Rebuild 
 - 原始压缩包另行保存在本地，不上传 GitHub
 
 本次修复没有更改 VS2010、.NET 4.0、x86 和 ArcGIS 10.2 的版本约束。具体来源和快照说明见 [ORIGINAL_SNAPSHOT.md](ORIGINAL_SNAPSHOT.md)。
+
+## 兼容性与样例验证
+
+第 6、7、9 次作业和期末项目的许可或路线代码更新后，使用 Windows 的 32 位 .NET Framework MSBuild 和本机 ArcObjects 10.2 程序集完成 Release | x86 构建。验证程序还在 Engine 10.2 中运行了以下用例。
+
+| 用例 | 实际验证范围 |
+| --- | --- |
+| 许可生命周期 | 初始化 Engine 产品许可，分别签出并归还 Spatial Analyst 和 Network Analyst 扩展 |
+| 作业 9 坡度 | 读取随仓库提供的 DEM，按程序中的分析环境和参数得到 788 × 768 的坡度栅格，中心像元约 11.08° |
+| 期末项目路线 | 打开随项目提供的 MXD，使用有效 Route 图层定位两个停靠点，调用项目中的停靠点写入与路线读取方法，求得非零长度的完整路线，并验证远离网络的点被拒绝 |
+
+坡度和路线用例在验证程序中调用 ArcObjects，验证范围为分析链路。窗体中的鼠标交互、图层重绘和其他工具可按各作业的操作步骤复核。
 
 ## 常见问题
 

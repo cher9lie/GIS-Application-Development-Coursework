@@ -53,6 +53,10 @@ MXD 仍可能保留原数据源路径。如果图层引用失效，程序会尝�
 
 这里输入的是两个方向角，不需要输入距离。原说明中若出现“距离与方位角同时输入”的表述，与当前源码不符。
 
+## 几何实现细节
+
+折线加密控制标记移动时的采样密度。`timer1_Tick` 按点序列推进，更新的是地图图形层中的标记；遇到长度差异较大的线段时，视觉速度仍可能不均匀。前方交会复用采样序列两端作为已知点。数学上可写为两条直线 `A + t·(cos α, sin α)` 与 `B + u·(cos β, sin β)` 的交点。ArcObjects 的 `ConstructAngleIntersection` 接受从正 X 轴逆时针量取的几何角，输入框用度，接口用弧度。例如基线 A=(0,0)、B=(100,0)，输入 45° 和 135° 时，理论交点为 (50,50)。[Esri ConstructAngleIntersection 文档](https://resources.arcgis.com/en/help/arcobjects-net/componentHelp/002m/002m000000wr000000.htm)
+
 ## 操作步骤
 
 1. 生成并启动程序。

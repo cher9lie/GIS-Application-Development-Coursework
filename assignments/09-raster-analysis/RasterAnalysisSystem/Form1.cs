@@ -21,18 +21,8 @@ namespace RasterAnalysisSystem
 {
     public partial class Form1 : Form
     {
-        // 全局变量
-        private ISurfaceOp m_SurfaceOp;
-        private IExtractionOp m_ExtractionOp;
-
-        private void Form1_Load(object sender, EventArgs e)
-        {
-
-
-            // 初始化对象
-    //        m_SurfaceOp = new RasterSurfaceOpClass();
-    //        m_ExtractionOp = new RasterExtractionOpClass();
-        }
+        private readonly ISurfaceOp m_SurfaceOp;
+        private readonly IExtractionOp m_ExtractionOp;
 
         // 辅助函数：获取当前栅格
         private IGeoDataset GetCurrentRaster()
@@ -139,32 +129,12 @@ namespace RasterAnalysisSystem
             }
         }
 
-public Form1()
-{
-    InitializeComponent();
-
-    // =============================================================
-    // 【强行开启许可】防止界面勾选无效
-    // =============================================================
-    try
-    {
-        ESRI.ArcGIS.esriSystem.IAoInitialize aoInit = new ESRI.ArcGIS.esriSystem.AoInitializeClass();
-        ESRI.ArcGIS.esriSystem.esriLicenseStatus status = aoInit.CheckOutExtension(ESRI.ArcGIS.esriSystem.esriLicenseExtensionCode.esriLicenseExtensionCodeSpatialAnalyst);
-
-        if (status != ESRI.ArcGIS.esriSystem.esriLicenseStatus.esriLicenseCheckedOut)
+        public Form1()
         {
-            MessageBox.Show("警告：Spatial Analyst 许可开启失败！状态：" + status.ToString());
+            InitializeComponent();
+            m_SurfaceOp = new RasterSurfaceOpClass();
+            m_ExtractionOp = new RasterExtractionOpClass();
         }
-
-        // 初始化分析工具
-        m_SurfaceOp = new RasterSurfaceOpClass();
-        m_ExtractionOp = new RasterExtractionOpClass();
-    }
-    catch (Exception ex)
-    {
-        MessageBox.Show("初始化失败：" + ex.Message);
-    }
-}
 
         private void btnLoad_Click(object sender, EventArgs e)
         {
@@ -193,26 +163,6 @@ public Form1()
                 IGeoDataset input = GetCurrentRaster();
                 if (input == null) return;
 
-                // ========================================================
-                // 【强制唤醒】不管之前有没有初始化，这里强行再初始化一次
-                // ========================================================
-                try
-                {
-                    // 强行开启许可
-                    ESRI.ArcGIS.esriSystem.IAoInitialize aoInit = new ESRI.ArcGIS.esriSystem.AoInitializeClass();
-                    aoInit.CheckOutExtension(ESRI.ArcGIS.esriSystem.esriLicenseExtensionCode.esriLicenseExtensionCodeSpatialAnalyst);
-
-                    // 强行创建工具 (防止 m_SurfaceOp 为空)
-                    if (m_SurfaceOp == null)
-                    {
-                        m_SurfaceOp = new RasterSurfaceOpClass();
-                    }
-                }
-                catch (Exception initEx)
-                {
-                    MessageBox.Show("严重警告：无法初始化分析工具。\n请检查您的 ArcGIS 许可是否正常。\n" + initEx.Message);
-                    return;
-                }
 
                 // 2. 设置环境 (关键步骤)
                 IRasterAnalysisEnvironment env = m_SurfaceOp as IRasterAnalysisEnvironment;
@@ -251,17 +201,6 @@ public Form1()
                 IGeoDataset input = GetCurrentRaster();
                 if (input == null) return;
 
-                // 2. 强制唤醒分析工具 (防止为空)
-                if (m_SurfaceOp == null)
-                {
-                    try
-                    {
-                        ESRI.ArcGIS.esriSystem.IAoInitialize aoInit = new ESRI.ArcGIS.esriSystem.AoInitializeClass();
-                        aoInit.CheckOutExtension(ESRI.ArcGIS.esriSystem.esriLicenseExtensionCode.esriLicenseExtensionCodeSpatialAnalyst);
-                        m_SurfaceOp = new RasterSurfaceOpClass();
-                    }
-                    catch { MessageBox.Show("无法初始化坡向分析工具。"); return; }
-                }
 
                 // 3. 环境设置 (防止 010050 错误)
                 IRasterAnalysisEnvironment env = m_SurfaceOp as IRasterAnalysisEnvironment;
@@ -359,16 +298,6 @@ public Form1()
                 IGeoDataset input = GetCurrentRaster();
                 if (input == null) return;
 
-                if (m_ExtractionOp == null)
-                {
-                    try
-                    {
-                        ESRI.ArcGIS.esriSystem.IAoInitialize aoInit = new ESRI.ArcGIS.esriSystem.AoInitializeClass();
-                        aoInit.CheckOutExtension(ESRI.ArcGIS.esriSystem.esriLicenseExtensionCode.esriLicenseExtensionCodeSpatialAnalyst);
-                        m_ExtractionOp = new RasterExtractionOpClass();
-                    }
-                    catch { return; }
-                }
 
                 IRasterAnalysisEnvironment env = m_ExtractionOp as IRasterAnalysisEnvironment;
                 env.SetCellSize(esriRasterEnvSettingEnum.esriRasterEnvValue, input);

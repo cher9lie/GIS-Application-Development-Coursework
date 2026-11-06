@@ -52,6 +52,22 @@
 
 主地图范围变化时，程序把主地图图层复制到第二个 MapControl，并用图形元素表示当前视图范围。鹰眼只用于导航，不是独立的数据编辑窗口。
 
+## 鹰眼与属性窗体的数据流
+
+```mermaid
+flowchart LR
+    A["主地图加载图层"] --> B["SynchronizeEagleEye"]
+    B --> C["鹰眼地图"]
+    D["主图 OnExtentUpdated"] --> E["DrawRectangle"]
+    E --> C
+    C -->|点击后重定位| D
+    T["TOC 右键取得图层"] --> G["CreateDataTable"]
+    G --> H["Form2.LoadDataTable"]
+    H --> J["DataGridView"]
+```
+
+范围框是鹰眼视图中的图形元素，不会写回要素类。`CreateDataTable` 从图层读取字段与要素值，构造 WinForms 能绑定的表，再交给 `Form2` 展示。可以先平移主图验证范围框更新，再在鹰眼点击验证主图回定位，最后对两个不同图层分别打开属性表，核对字段是否随右键目标变化。
+
 ## 本次整理修复
 
 - 查询前检查 `NAME` 字段是否存在

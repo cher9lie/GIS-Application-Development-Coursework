@@ -13,7 +13,7 @@
 - 解决方案：`MapSymbolizationLab.sln`
 - 主要代码：`MapSymbolizationLab/Form1.cs`
 
-程序使用 `RuntimeManager.Bind(ProductCode.EngineOrDesktop)` 绑定可用运行时。
+程序优先绑定 ArcGIS Engine 运行时。未安装 Engine 时尝试 Desktop。主窗体只在对应的产品许可初始化成功后打开，关闭程序时释放许可。若启动失败，请在 ArcGIS Administrator 中检查所绑定产品的授权。
 
 ## 已实现功能
 
@@ -51,6 +51,25 @@
 - 面：Fill Symbol
 
 “通用”指按点、线、面适配符号类型，并不表示自动识别任意专题字段。
+
+## 渲染器、字段与符号
+
+```mermaid
+classDiagram
+    class IGeoFeatureLayer
+    class IFeatureRenderer
+    class IUniqueValueRenderer
+    class IClassBreaksRenderer
+    class IChartRenderer
+    class ISymbol
+    IGeoFeatureLayer --> IFeatureRenderer : Renderer
+    IFeatureRenderer ..> IUniqueValueRenderer : 唯一值方案
+    IFeatureRenderer ..> IClassBreaksRenderer : 分级方案
+    IFeatureRenderer ..> IChartRenderer : 图表方案
+    IFeatureRenderer --> ISymbol : 绘制符号
+```
+
+图中虚线表示本作业选择的渲染方案。渲染逻辑从图层取字段值，选中对应的符号或图表样式。对比 `btnUniqueValue_Click` 与 `btnGraduated_Click`，前者用分类值匹配，后者用数值断点匹配。柱状图和饼图由 `IRendererFields` 决定读取哪些属性，字段顺序与图表符号各部分的配置要对应。替换字段或断点后要把配置好的渲染器赋回 `IGeoFeatureLayer.Renderer`，并刷新视图与图层目录，便于核对地图符号和图例。
 
 ## 推荐操作步骤
 

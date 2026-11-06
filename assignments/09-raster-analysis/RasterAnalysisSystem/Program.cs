@@ -1,36 +1,85 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Windows.Forms;
-// 1. 确保引用了这个命名空间
 using ESRI.ArcGIS;
+using ESRI.ArcGIS.esriSystem;
 
 namespace RasterAnalysisSystem
 {
     static class Program
     {
-        /// <summary>
-        /// 应用程序的主入口点。
-        /// </summary>
         [STAThread]
         static void Main()
         {
-            // ==========================================================
-            // 【关键修改】必须放在所有代码的第一行！
-            // 告诉程序使用 Engine 许可。如果你装的是 Desktop，也可以写 ProductCode.EngineOrDesktop
-            if (!RuntimeManager.Bind(ProductCode.Engine))
+            IAoInitialize license = null;
+            bool initialized = false;
+            const esriLicenseExtensionCode extension =
+                esriLicenseExtensionCode.esriLicenseExtensionCodeSpatialAnalyst;
+            bool extensionCheckedOut = false;
+            try
             {
-                if (!RuntimeManager.Bind(ProductCode.Desktop))
+                bool engine = RuntimeManager.Bind(ProductCode.Engine);
+                if (!engine && !RuntimeManager.Bind(ProductCode.Desktop))
                 {
-                    MessageBox.Show("无法绑定 ArcGIS 许可，请确认已安装 ArcGIS Engine 或 Desktop。");
+                    MessageBox.Show("无法绑定 ArcGIS 运行时。请确认已安装 ArcGIS Engine 或 Desktop 10.2。", "ArcGIS 许可");
                     return;
                 }
-            }
-            // ==========================================================
 
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new Form1());
+                license = new AoInitializeClass();
+                esriLicenseProductCode[] products = engine
+                    ? new[] { esriLicenseProductCode.esriLicenseProductCodeEngine,
+                              esriLicenseProductCode.esriLicenseProductCodeEngineGeoDB }
+                    : new[] { esriLicenseProductCode.esriLicenseProductCodeBasic,
+                              esriLicenseProductCode.esriLicenseProductCodeStandard,
+                              esriLicenseProductCode.esriLicenseProductCodeAdvanced };
+
+                foreach (esriLicenseProductCode product in products)
+                {
+                    if (license.IsProductCodeAvailable(product) != esriLicenseStatus.esriLicenseAvailable)
+                        continue;
+
+                    initialized = license.Initialize(product) == esriLicenseStatus.esriLicenseCheckedOut;
+                    if (initialized)
+                        break;
+                }
+
+                if (!initialized)
+                {
+                    MessageBox.Show("无法初始化 ArcGIS 产品许可。请在 ArcGIS Administrator 中检查授权。", "ArcGIS 许可");
+                    return;
+                }
+
+                esriLicenseStatus status = license.CheckOutExtension(extension);
+                extensionCheckedOut = status == esriLicenseStatus.esriLicenseCheckedOut;
+                if (!extensionCheckedOut)
+                {
+                    MessageBox.Show("无法获取 Spatial Analyst 扩展许可：" + status, "ArcGIS 许可");
+                    return;
+                }
+
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                using (Form1 form = new Form1())
+                {
+                    Application.Run(form);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("程序启动或运行失败：" + ex.Message, "ArcGIS");
+            }
+            finally
+            {
+                try
+                {
+                    if (extensionCheckedOut)
+                        license.CheckInExtension(extension);
+                }
+                finally
+                {
+                    if (initialized)
+                        license.Shutdown();
+                }
+            }
         }
     }
 }

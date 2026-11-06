@@ -147,13 +147,55 @@ TOCControl 用于显示地图图层。许多功能会优先使用 TOC 中当前�
 4. 启动程序并确认 MXD 数据源未断开。
 5. 点击“路径分析”。
 6. 按提示在地图上依次点击起点和终点。
-7. 程序向 Stops 写入两个位置，调用求解器，再把路线几何绘制到地图。
+7. 程序用路线图层的网络定位器查找两点对应的道路位置，写入 Stops 后调用求解器。只有起终点之间求得完整路线时，才把路线几何绘制到地图。
 
-当前源码保留了部分调试消息，例如 Stops 数量提示。这有助于课堂排查，但不属于完善的最终用户体验。
+如果某个点未能定位，请靠近可通行的道路重新选点，并检查路线图层的搜索容差。如果两点都已定位仍无法连通，请结合求解器的消息检查路网连通性、单行限制和障碍设置。
 
 ### 12. 导出 PDF
 
 点击“导出PDF”后选择保存位置，程序通过 `ExportPDFClass` 导出当前地图视图。输出的是地图视图，不是完整的独立报表系统。
+
+## 主窗体的对象关系
+
+```mermaid
+classDiagram
+    class MainForm
+    class AxMapControl
+    class IFeatureLayer
+    class IFeatureSelection
+    class StatsChartForm
+    class INAContext
+    class INALocator
+    class INASolver
+    MainForm --> AxMapControl : 读写地图和视图
+    MainForm --> StatsChartForm : 展示统计
+    AxMapControl --> IFeatureLayer : 地图中的要素层
+    IFeatureLayer ..> IFeatureSelection : 查询选择集接口
+    MainForm --> INAContext : 取得路线分析上下文
+    INAContext --> INALocator : 查找网络位置
+    INAContext --> INASolver : 求解路线
+```
+
+普通查询将匹配对象保存在图层选择集中，统计窗体从选择集读取数据。缓冲图形与路线线条加在地图的图形容器里，属性编辑和新增点则通过工作空间编辑会话写入要素数据源。调试时可先判断某个按钮改变的是选择集、显示元素还是要素记录，再决定检查哪一层。
+
+### 路径分析的实现链
+
+```mermaid
+flowchart TD
+    A["在地图上点击起点和终点"] --> B["查找 Route 图层和 INAContext"]
+    B --> C["转换到 Stops 的空间参考"]
+    C --> D["QueryLocationByPoint 定位两点"]
+    D --> E{"两点均已定位？"}
+    E -->|否| F["提示未定位的端点"]
+    E -->|是| G["在编辑操作内替换 Stops"]
+    G --> H["Solve 并检查 GPMessages"]
+    H --> I{"完整路线且存在有效几何？"}
+    I -->|否| J["显示求解状态与消息"]
+    I -->|是| K["复制路线几何并转回地图坐标"]
+    K --> L["绘制路线并缩放到结果"]
+```
+
+`PrepareStopPoint` 负责坐标转换，`LocateStop` 读取定位结果，`StoreStop` 通过 `INALocationObject.NALocation` 写入网络位置并设置顺序。这样道路来源和沿边位置与屏幕点击点分开保存。`Solve` 的布尔值为真表示部分结果，错误、取消和警告还应从 `GPMessages` 读取。`ReadRouteShape` 先取得几何副本再释放游标，随后才交给地图图形元素。[Esri 网络位置属性](https://resources.arcgis.com/en/help/arcobjects-net/componentHelp/0036/0036000000n6000000.htm) · [Esri 求解返回值](https://resources.arcgis.com/en/help/arcobjects-net/componentHelp/0036/0036000001p0000000.htm)
 
 ## 推荐演示顺序
 

@@ -1,30 +1,66 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Windows.Forms;
-using ESRI.ArcGIS; // 1. 添加这行引用
+using ESRI.ArcGIS;
+using ESRI.ArcGIS.esriSystem;
 
 namespace MapSymbolizationLab
 {
     static class Program
     {
-        /// <summary>
-        /// 应用程序的主入口点。
-        /// </summary>
         [STAThread]
         static void Main()
         {
-            // 2. 必须在 Application.EnableVisualStyles() 之前添加下面这行！
-            // 这句话的意思是：绑定到 Engine 或者 Desktop 产品，谁有许可就用谁
-            if (!RuntimeManager.Bind(ProductCode.EngineOrDesktop))
+            IAoInitialize license = null;
+            bool initialized = false;
+            try
             {
-                MessageBox.Show("无法绑定到 ArcGIS 运行时，请确保安装了 ArcGIS 并且许可可用。");
-                return;
-            }
+                bool engine = RuntimeManager.Bind(ProductCode.Engine);
+                if (!engine && !RuntimeManager.Bind(ProductCode.Desktop))
+                {
+                    MessageBox.Show("无法绑定 ArcGIS 运行时。请确认已安装 ArcGIS Engine 或 Desktop 10.2。", "ArcGIS 许可");
+                    return;
+                }
 
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new Form1());
+                license = new AoInitializeClass();
+                esriLicenseProductCode[] products = engine
+                    ? new[] { esriLicenseProductCode.esriLicenseProductCodeEngine,
+                              esriLicenseProductCode.esriLicenseProductCodeEngineGeoDB }
+                    : new[] { esriLicenseProductCode.esriLicenseProductCodeBasic,
+                              esriLicenseProductCode.esriLicenseProductCodeStandard,
+                              esriLicenseProductCode.esriLicenseProductCodeAdvanced };
+
+                foreach (esriLicenseProductCode product in products)
+                {
+                    if (license.IsProductCodeAvailable(product) != esriLicenseStatus.esriLicenseAvailable)
+                        continue;
+
+                    initialized = license.Initialize(product) == esriLicenseStatus.esriLicenseCheckedOut;
+                    if (initialized)
+                        break;
+                }
+
+                if (!initialized)
+                {
+                    MessageBox.Show("无法初始化 ArcGIS 产品许可。请在 ArcGIS Administrator 中检查授权。", "ArcGIS 许可");
+                    return;
+                }
+
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                using (Form1 form = new Form1())
+                {
+                    Application.Run(form);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("程序启动或运行失败：" + ex.Message, "ArcGIS");
+            }
+            finally
+            {
+                if (initialized)
+                    license.Shutdown();
+            }
         }
     }
 }

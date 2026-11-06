@@ -56,6 +56,16 @@
 
 需要注意：缓冲区输入是整个第一个图层，不是当前选中的要素。输出同名文件允许覆盖。
 
+## 三条处理链及其输出
+
+| 入口 | 查询或分析对象 | 输出如何进入界面 |
+| --- | --- | --- |
+| `btnAttributeSearch_Click` | `IQueryFilter` 使用属性表达式 | 选择结果在地图中高亮，属性写入表格 |
+| `btnSpatialSearch_Click` | `TrackRectangle` 提供包络，`ISpatialFilter` 使用相交关系 | 逐条读取命中要素，写入选择集和表格 |
+| `btnBuffer_Click` | `Geoprocessor` 执行 Buffer，使用输入图层和固定的 `500 Meters` | 输出要素文件作为新图层加载 |
+
+用同一份 Shapefile 依次做关键字查找和拉框查询，可以观察属性条件与几何条件分别如何决定选择集。缓冲是单独的处理链，输出会形成新的面要素。更换工作空间时应根据数据源核对字段分隔符和通配符，并从要素类获取几何字段名。[Esri 查询表达式文档](https://resources.arcgis.com/en/help/arcobjects-net/componentHelp/0025/0025000006n5000000.htm)
+
 ## 数据要求
 
 - 只加载 Shapefile。
