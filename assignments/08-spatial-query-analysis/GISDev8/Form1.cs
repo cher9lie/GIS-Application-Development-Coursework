@@ -117,7 +117,9 @@ namespace GISDev8
 
             // 3. 获取图层并搜索
             IFeatureLayer pFeatureLayer = axMapControl1.get_Layer(0) as IFeatureLayer;
-            if (pFeatureLayer == null) return;
+            if (pFeatureLayer == null || pFeatureLayer.FeatureClass == null) return;
+            pSpatialFilter.GeometryField = pFeatureLayer.FeatureClass.ShapeFieldName;
+            pEnvelope.SpatialReference = axMapControl1.SpatialReference;
 
             IFeatureSelection spatialSelection = pFeatureLayer as IFeatureSelection;
             spatialSelection.Clear();

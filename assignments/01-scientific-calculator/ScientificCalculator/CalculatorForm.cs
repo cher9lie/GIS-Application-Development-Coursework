@@ -11,6 +11,7 @@ namespace ScientificCalculator
         private double previousValue = 0;
         private string currentOperation = "";
         private bool operationPending = false;
+        private bool operandEntered = false;
         private bool lastOperationWasEquals = false;
         private double memoryValue = 0;
         private bool hasMemoryValue = false;
@@ -68,6 +69,7 @@ namespace ScientificCalculator
                 }
 
                 currentValue = ParseDisplayValue();
+                operandEntered = true;
             }
             catch (Exception)
             {
@@ -93,6 +95,7 @@ namespace ScientificCalculator
                 }
                 
                 currentValue = ParseDisplayValue();
+                operandEntered = true;
             }
             catch (Exception)
             {
@@ -123,7 +126,7 @@ namespace ScientificCalculator
         {
             try
             {
-                if (operationPending && !lastOperationWasEquals)
+                if (operationPending && !lastOperationWasEquals && operandEntered)
                 {
                     CalculateResult();
                 }
@@ -131,6 +134,7 @@ namespace ScientificCalculator
                 previousValue = currentValue;
                 currentOperation = operation;
                 operationPending = true;
+                operandEntered = false;
                 newNumberFlag = true;
                 lastOperationWasEquals = false;
             }
@@ -337,6 +341,7 @@ namespace ScientificCalculator
                     DisplayValue(result);
                     newNumberFlag = true;
                     lastOperationWasEquals = false;
+                    operandEntered = true;
                 }
             }
             catch (OverflowException)
@@ -391,6 +396,7 @@ namespace ScientificCalculator
 
                 currentValue = value;
                 DisplayValue(value);
+                operandEntered = true;
                 newNumberFlag = true;
                 lastOperationWasEquals = false;
             }
@@ -414,6 +420,7 @@ namespace ScientificCalculator
                 txtDisplay.Text = "0";
                 currentValue = 0;
                 newNumberFlag = true;
+                operandEntered = true;
             }
             catch (Exception)
             {
@@ -504,6 +511,7 @@ namespace ScientificCalculator
                         {
                             currentValue = memoryValue;
                             DisplayValue(memoryValue);
+                            operandEntered = true;
                             newNumberFlag = true;
                         }
                         break;
@@ -635,6 +643,7 @@ namespace ScientificCalculator
                 currentOperation = "";
                 operationPending = false;
                 lastOperationWasEquals = false;
+                operandEntered = false;
                 newNumberFlag = true;
             }
             catch (Exception)

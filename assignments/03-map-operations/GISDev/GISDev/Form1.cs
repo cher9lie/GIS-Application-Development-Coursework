@@ -35,7 +35,8 @@ namespace GISDev
             System.Windows.Forms.OpenFileDialog openFileDialog = new System.Windows.Forms.OpenFileDialog();
             openFileDialog.Title = "open map document";
             openFileDialog.Filter = "map document (*.mxd)|*.mxd";
-            openFileDialog.ShowDialog();
+            if (openFileDialog.ShowDialog() != DialogResult.OK)
+                return;
             string strFilePath = openFileDialog.FileName;
             if (axMapControl1.CheckMxFile(strFilePath))
             {
@@ -52,7 +53,7 @@ namespace GISDev
         // 全屏
         private void tlbGloble_Click(object sender, EventArgs e)
         {
-            m_BasicOperationTool = "isZoomFull";
+            m_BasicOperationTool = "";
             axMapControl1.Extent = axMapControl1.FullExtent; // 直接生效
         }
         // 放大
@@ -80,13 +81,25 @@ namespace GISDev
             switch (m_BasicOperationTool)
             {
                 case "ZoomIn":
-                    axMapControl1.Extent = axMapControl1.TrackRectangle(); // 拉框放大
+                    IEnvelope zoomEnvelope = axMapControl1.TrackRectangle();
+                    if (zoomEnvelope == null || zoomEnvelope.IsEmpty ||
+                        zoomEnvelope.Width <= 0 || zoomEnvelope.Height <= 0)
+                        return;
+                    axMapControl1.Extent = zoomEnvelope;
                     break;
                 case "ZoomOut":
                     IEnvelope objEnvelope = axMapControl1.TrackRectangle();
-                    // 扩大包络线范围以缩小显示
-                    objEnvelope.Expand(2, 2, true);
-                    axMapControl1.Extent = objEnvelope;
+                    if (objEnvelope == null || objEnvelope.IsEmpty || objEnvelope.Width <= 0 || objEnvelope.Height <= 0)
+                        return;
+                    IEnvelope currentExtent = axMapControl1.Extent;
+                    double scale = Math.Max(currentExtent.Width / objEnvelope.Width,
+                        currentExtent.Height / objEnvelope.Height);
+                    IPoint zoomCenter = new PointClass();
+                    zoomCenter.PutCoords((objEnvelope.XMin + objEnvelope.XMax) / 2,
+                        (objEnvelope.YMin + objEnvelope.YMax) / 2);
+                    currentExtent.CenterAt(zoomCenter);
+                    currentExtent.Expand(Math.Max(1.5, scale), Math.Max(1.5, scale), true);
+                    axMapControl1.Extent = currentExtent;
                     break;
                 case "ZoomPan":
                     axMapControl1.Pan(); // 鼠标拖动平移
@@ -127,6 +140,8 @@ namespace GISDev
 
                             // 5. 创建空间过滤器 (SpatialFilter)
                             ISpatialFilter spatialFilter = new SpatialFilterClass();
+                            pEnvelope.SpatialReference = axMapControl1.SpatialReference;
+                            spatialFilter.GeometryField = featureClass.ShapeFieldName;
                             spatialFilter.Geometry = pEnvelope; // 使用我们创建的矩形框
                             spatialFilter.SpatialRel = esriSpatialRelEnum.esriSpatialRelIntersects; // 查询方式：相交
 

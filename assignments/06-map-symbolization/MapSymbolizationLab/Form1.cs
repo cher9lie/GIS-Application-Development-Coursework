@@ -107,6 +107,7 @@ namespace MapSymbolizationLab
             switch (pLayer.FeatureClass.ShapeType)
             {
                 case esriGeometryType.esriGeometryPoint:
+                case esriGeometryType.esriGeometryMultipoint:
                     ISimpleMarkerSymbol pMarkerSym = new SimpleMarkerSymbolClass();
                     pMarkerSym.Style = esriSimpleMarkerStyle.esriSMSCircle;
                     pMarkerSym.Color = GetRgbColor(255, 0, 0); // 红点

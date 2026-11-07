@@ -42,8 +42,54 @@ namespace FuTianGIS
         private bool _isAddingPoint = false;
         // 最近一次生成的缓冲几何，供功能 10 复用
         private IGeometry _lastBufferGeometry;
+        private IElement _bufferElement;
         // 统计窗口引用（选中变化时重用）
         private StatsChartForm _statsForm;
+        private static string BuildSearchWhereClause(IFeatureClass featureClass, string fieldName, string text)
+        {
+            int fieldIndex = featureClass.FindField(fieldName);
+            if (fieldIndex < 0)
+                throw new ArgumentException("图层中不存在查询字段：" + fieldName);
+
+            ISQLSyntax syntax = (ISQLSyntax)((IDataset)featureClass).Workspace;
+            string identifier = syntax.GetSpecialCharacter(esriSQLSpecialCharacters.esriSQL_DelimitedIdentifierPrefix) +
+                fieldName + syntax.GetSpecialCharacter(esriSQLSpecialCharacters.esriSQL_DelimitedIdentifierSuffix);
+            IField field = featureClass.Fields.get_Field(fieldIndex);
+            if (field.Type == esriFieldType.esriFieldTypeString)
+            {
+                string wildcard = syntax.GetSpecialCharacter(esriSQLSpecialCharacters.esriSQL_WildcardManyMatch);
+                return identifier + " LIKE '" + wildcard + text.Replace("'", "''") + wildcard + "'";
+            }
+            if (field.Type != esriFieldType.esriFieldTypeInteger &&
+                field.Type != esriFieldType.esriFieldTypeSmallInteger &&
+                field.Type != esriFieldType.esriFieldTypeOID &&
+                field.Type != esriFieldType.esriFieldTypeDouble &&
+                field.Type != esriFieldType.esriFieldTypeSingle)
+                throw new ArgumentException("当前显示字段不支持文本或数值查询，请更换图层的显示字段。");
+
+            double value;
+            if ((!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) &&
+                 !double.TryParse(text, out value)) || double.IsNaN(value) || double.IsInfinity(value))
+                throw new ArgumentException("当前显示字段是数值字段，请输入有效数字。");
+            return identifier + " = " + value.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static ISymbol CreateFeatureSymbol(esriGeometryType geometryType, IColor color)
+        {
+            switch (geometryType)
+            {
+                case esriGeometryType.esriGeometryPoint:
+                case esriGeometryType.esriGeometryMultipoint:
+                    return (ISymbol)new SimpleMarkerSymbolClass { Color = color, Size = 6 };
+                case esriGeometryType.esriGeometryPolyline:
+                    return (ISymbol)new SimpleLineSymbolClass { Color = color, Width = 1.5 };
+                case esriGeometryType.esriGeometryPolygon:
+                    return (ISymbol)new SimpleFillSymbolClass { Color = color, Style = esriSimpleFillStyle.esriSFSSolid };
+                default:
+                    throw new NotSupportedException("该几何类型不支持当前渲染。");
+            }
+        }
+
         private void ApplyUniqueValueRenderer(IFeatureLayer featureLayer, string fieldName)
         {
             if (featureLayer == null || featureLayer.FeatureClass == null)
@@ -74,44 +120,34 @@ namespace FuTianGIS
 
             // 遍历所有要素，收集唯一值，并为每个值创建符号
             IFeatureCursor cursor = featureClass.Search(null, true);
-            IFeature feature = cursor.NextFeature();
-
-            System.Collections.Generic.Dictionary<string, bool> valueDict =
-                new System.Collections.Generic.Dictionary<string, bool>();
-
-            while (feature != null)
+            try
             {
-                object valObj = feature.get_Value(fieldIndex);
-                if (valObj != null && valObj != DBNull.Value)
+                HashSet<string> values = new HashSet<string>();
+                IFeature feature;
+                while ((feature = cursor.NextFeature()) != null)
                 {
-                    string value = valObj.ToString();
-
-                    if (!valueDict.ContainsKey(value))
+                    object rawValue = feature.get_Value(fieldIndex);
+                    if (rawValue == null || rawValue == DBNull.Value)
+                        continue;
+                    string value = rawValue.ToString();
+                    if (!values.Add(value))
+                        continue;
+                    IColor color = new RgbColorClass
                     {
-                        valueDict[value] = true;
-
-                        // 创建随机颜色
-                        IRgbColor color = new RgbColorClass();
-                        color.Red = rand.Next(0, 256);
-                        color.Green = rand.Next(0, 256);
-                        color.Blue = rand.Next(0, 256);
-                        color.Transparency = 255;
-
-                        // 面要素：使用填充符号
-                        ISimpleFillSymbol fillSymbol = new SimpleFillSymbolClass();
-                        fillSymbol.Color = color;
-                        fillSymbol.Style = esriSimpleFillStyle.esriSFSSolid;
-
-                        ISymbol symbol = (ISymbol)fillSymbol;
-
-                        // 添加到唯一值渲染器
-                        uniqueValueRenderer.AddValue(value, fieldName, symbol);
-                        uniqueValueRenderer.set_Label(value, value);
-                    }
+                        Red = rand.Next(0, 256), Green = rand.Next(0, 256),
+                        Blue = rand.Next(0, 256), Transparency = 255
+                    };
+                    uniqueValueRenderer.AddValue(value, fieldName, CreateFeatureSymbol(featureClass.ShapeType, color));
+                    uniqueValueRenderer.set_Label(value, value);
                 }
-
-                feature = cursor.NextFeature();
             }
+            finally
+            {
+                Marshal.ReleaseComObject(cursor);
+            }
+            uniqueValueRenderer.UseDefaultSymbol = true;
+            uniqueValueRenderer.DefaultSymbol = CreateFeatureSymbol(featureClass.ShapeType,
+                new RgbColorClass { Red = 180, Green = 180, Blue = 180 });
 
             // 设置到图层上
             IGeoFeatureLayer geoFeatureLayer = featureLayer as IGeoFeatureLayer;
@@ -189,62 +225,21 @@ namespace FuTianGIS
             if (map == null)
                 return null;
 
-            // ---------- 1. 尝试通过 TOC 当前选中项获取图层 ----------
-            try
-            {
-                esriTOCControlItem itemType = esriTOCControlItem.esriTOCControlItemNone;
-                object tocItem = null;
-                object tocLayer = null;
-                object tocOther = null;
+            esriTOCControlItem item = esriTOCControlItem.esriTOCControlItemNone;
+            IBasicMap selectedMap = null;
+            ILayer selectedLayer = null;
+            object other = null;
+            object index = null;
+            axTOCControl1.GetSelectedItem(ref item, ref selectedMap, ref selectedLayer, ref other, ref index);
+            if (selectedLayer != null)
+                return selectedLayer.Valid ? selectedLayer as IFeatureLayer : null;
 
-                // 我们不知道当前版本 GetSelectedItem 是 3 个参数还是 4 个参数，
-                // 所以用反射逐个尝试，避免编译期出错。
-                var method = typeof(AxTOCControl).GetMethod("GetSelectedItem");
-                if (method != null)
-                {
-                    var parameters = method.GetParameters();
-                    // 4 个参数版本：GetSelectedItem(ref itemType, ref tocItem, ref tocLayer, ref tocOther)
-                    if (parameters.Length == 4)
-                    {
-                        object[] args = new object[] { itemType, tocItem, tocLayer, tocOther };
-                        method.Invoke(axTOCControl1, args);
-                        itemType = (esriTOCControlItem)args[0];
-                        tocItem = args[1];
-                        tocLayer = args[2];
-                        tocOther = args[3];
-                    }
-                    // 3 个参数版本：GetSelectedItem(ref itemType, ref tocItem, ref tocLayer)
-                    else if (parameters.Length == 3)
-                    {
-                        object[] args = new object[] { itemType, tocItem, tocLayer };
-                        method.Invoke(axTOCControl1, args);
-                        itemType = (esriTOCControlItem)args[0];
-                        tocItem = args[1];
-                        tocLayer = args[2];
-                    }
-                    // 其它参数个数就不管了，直接跳过
-                }
-
-                if (itemType == esriTOCControlItem.esriTOCControlItemLayer && tocLayer is IFeatureLayer)
-                {
-                    return (IFeatureLayer)tocLayer;
-                }
-            }
-            catch
-            {
-                // 任何异常都忽略，继续用 fallback 方式
-            }
-
-            // ---------- 2. 如果 TOC 没有选中合适图层，则返回最上面的可见要素图层 ----------
             for (int i = 0; i < map.LayerCount; i++)
             {
                 ILayer layer = map.get_Layer(i);
-                if (layer is IFeatureLayer && layer.Visible)
-                {
+                if (layer.Visible && layer.Valid && layer is IFeatureLayer)
                     return (IFeatureLayer)layer;
-                }
             }
-
             return null;
         }
         private void btnLoadMap_Click(object sender, EventArgs e)
@@ -319,11 +314,15 @@ namespace FuTianGIS
                         IEnumDataset enumDataset = ws.get_Datasets(esriDatasetType.esriDTFeatureClass);
 
                         List<string> fcNames = new List<string>();
-                        IDataset dataset = enumDataset.Next();
-                        while (dataset != null)
+                        try
                         {
-                            fcNames.Add(dataset.Name);
-                            dataset = enumDataset.Next();
+                            IDataset dataset;
+                            while ((dataset = enumDataset.Next()) != null)
+                                fcNames.Add(dataset.Name);
+                        }
+                        finally
+                        {
+                            Marshal.ReleaseComObject(enumDataset);
                         }
 
                         if (fcNames.Count == 0)
@@ -530,122 +529,46 @@ namespace FuTianGIS
                     // 1. 屏幕坐标转地图坐标
                     IPoint mapPoint = axMapControl1.ActiveView.ScreenDisplay.DisplayTransformation.ToMapPoint(e.x, e.y);
 
-                    // 2. 启动编辑会话
-                    IDataset ds = fc as IDataset;
-                    if (ds == null || ds.Workspace == null)
-                    {
-                        MessageBox.Show("无法获取要素类所在的工作空间，不能编辑。", "新增点",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        _isAddingPoint = false;
-                        return;
-                    }
-
-                    IWorkspace workspace = ds.Workspace;
-                    IWorkspaceEdit workspaceEdit = workspace as IWorkspaceEdit;
-                    if (workspaceEdit == null)
-                    {
-                        MessageBox.Show("该数据源不支持编辑（可能是只读或非可编辑类型）。", "新增点",
-                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        _isAddingPoint = false;
-                        return;
-                    }
-
-                    bool startedHere = false;
-                    if (!workspaceEdit.IsBeingEdited())
-                    {
-                        workspaceEdit.StartEditing(false);
-                        workspaceEdit.StartEditOperation();
-                        startedHere = true;
-                    }
-                    else
-                    {
-                        workspaceEdit.StartEditOperation();
-                    }
-
-                    // 3. 创建新要素并设置几何
-                    IFeature newFeature = fc.CreateFeature();
-                    newFeature.Shape = mapPoint;
-
-                    // 4. 弹出多字段编辑窗体，让用户填写属性
+                    _isAddingPoint = false;
+                    mapPoint.SpatialReference = axMapControl1.Map.SpatialReference;
+                    IGeometry geometry = PreparePointGeometry(fc, mapPoint);
+                    Dictionary<int, object> values = new Dictionary<int, object>();
                     using (FeatureAttributeEditForm attrForm = new FeatureAttributeEditForm(fc.Fields))
                     {
-                        if (attrForm.ShowDialog(this) == DialogResult.OK)
+                        if (attrForm.ShowDialog(this) != DialogResult.OK)
+                            return;
+                        foreach (var item in attrForm.EditedItems)
                         {
-                            foreach (var item in attrForm.EditedItems)
-                            {
-                                int idx = fc.FindField(item.FieldName);
-                                if (idx < 0) continue;
-
-                                IField f = fc.Fields.get_Field(idx);
-                                string txt = item.Value;
-
-                                if (string.IsNullOrEmpty(txt))
-                                {
-                                    // 留空就不赋值或给 NULL
-                                    continue;
-                                }
-
-                                object valObj = null;
-
-                                switch (f.Type)
-                                {
-                                    case esriFieldType.esriFieldTypeString:
-                                        valObj = txt;
-                                        break;
-                                    case esriFieldType.esriFieldTypeInteger:
-                                    case esriFieldType.esriFieldTypeSmallInteger:
-                                        int intVal;
-                                        if (int.TryParse(txt, out intVal))
-                                            valObj = intVal;
-                                        break;
-                                    case esriFieldType.esriFieldTypeDouble:
-                                    case esriFieldType.esriFieldTypeSingle:
-                                        double dblVal;
-                                        if (double.TryParse(txt, out dblVal))
-                                            valObj = dblVal;
-                                        break;
-                                    case esriFieldType.esriFieldTypeDate:
-                                        DateTime dtVal;
-                                        if (DateTime.TryParse(txt, out dtVal))
-                                            valObj = dtVal;
-                                        break;
-                                    default:
-                                        break;
-                                }
-
-                                if (valObj != null)
-                                {
-                                    newFeature.set_Value(idx, valObj);
-                                }
-                            }
-
-                            // 5. 保存要素
-                            newFeature.Store();
-
-                            workspaceEdit.StopEditOperation();
-                            if (startedHere)
-                            {
-                                workspaceEdit.StopEditing(true);
-                            }
-
-                            axMapControl1.ActiveView.PartialRefresh(esriViewDrawPhase.esriViewGeography, null, null);
-
-                            MessageBox.Show("已成功新增一个点要素。", "新增点",
-                                MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        }
-                        else
-                        {
-                            // 用户取消输入，撤销本次编辑
-                            workspaceEdit.AbortEditOperation();
-                            if (startedHere)
-                            {
-                                workspaceEdit.StopEditing(false); // 不保存
-                            }
+                            if (string.IsNullOrEmpty(item.Value))
+                                continue;
+                            int fieldIndex = fc.FindField(item.FieldName);
+                            if (fieldIndex >= 0)
+                                values.Add(fieldIndex, ParseFieldValue(fc.Fields.get_Field(fieldIndex), item.Value));
                         }
                     }
-
-                    // 一次点击完成后退出新增模式（如需连续新增，可以不退出）
-                    _isAddingPoint = false;
+                    IWorkspaceEdit edit = ((IDataset)fc).Workspace as IWorkspaceEdit;
+                    if (edit == null)
+                        throw new InvalidOperationException("该数据源不支持编辑。");
+                    RunEditOperation(edit, delegate
+                    {
+                        IFeature createdFeature = fc.CreateFeature();
+                        try
+                        {
+                            if (((IDataset)fc).Workspace.Type != esriWorkspaceType.esriFileSystemWorkspace)
+                                ((IRowSubtypes)createdFeature).InitDefaultValues();
+                            createdFeature.Shape = geometry;
+                            foreach (KeyValuePair<int, object> value in values)
+                                createdFeature.set_Value(value.Key, value.Value);
+                            createdFeature.Store();
+                        }
+                        finally
+                        {
+                            Marshal.ReleaseComObject(createdFeature);
+                        }
+                    });
+                    axMapControl1.ActiveView.PartialRefresh(esriViewDrawPhase.esriViewGeography, null, null);
+                    MessageBox.Show("已成功新增一个点要素。", "新增点",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
 
                     return;
                 }
@@ -762,12 +685,13 @@ private void btnSearch_Click(object sender, EventArgs e)
         }
 
         // 2. 获取当前选中的图层，并进行有效性检查
-        if (axMapControl1.CustomProperty == null || !(axMapControl1.CustomProperty is IFeatureLayer))
+        IFeatureLayer featureLayer = GetCurrentFeatureLayer();
+        if (featureLayer == null)
         {
-            MessageBox.Show("请先在图层列表中选择一个有效的要素图层。", "操作无效", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show("请先在图层列表中选择一个有效的要素图层。", "操作无效",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
-        IFeatureLayer featureLayer = (IFeatureLayer)axMapControl1.CustomProperty;
         IFeatureClass featureClass = featureLayer.FeatureClass;
 
         if (featureClass == null)
@@ -788,25 +712,7 @@ private void btnSearch_Click(object sender, EventArgs e)
         // 4. 构建 QueryFilter
         IQueryFilter queryFilter = new QueryFilterClass();
         
-        // 检查字段类型，为字符串字段添加单引号
-        IField field = featureClass.Fields.get_Field(fieldIndex);
-        if (field.Type == esriFieldType.esriFieldTypeString)
-        {
-            string escapedText = searchText.Replace("'", "''");
-            queryFilter.WhereClause = displayField + " LIKE '%" + escapedText + "%'";
-        }
-        else
-        {
-            double numericValue;
-            if (!double.TryParse(searchText, NumberStyles.Float, CultureInfo.InvariantCulture, out numericValue) &&
-                !double.TryParse(searchText, out numericValue))
-            {
-                MessageBox.Show("当前显示字段是数值字段，请输入有效数字。", "输入无效",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            queryFilter.WhereClause = displayField + " = " + numericValue.ToString(CultureInfo.InvariantCulture);
-        }
+        queryFilter.WhereClause = BuildSearchWhereClause(featureClass, displayField, searchText);
 
         // 5. 执行选择
         IFeatureSelection featureSelection = (IFeatureSelection)featureLayer;
@@ -823,18 +729,32 @@ private void btnSearch_Click(object sender, EventArgs e)
         {
             IEnvelope selectionEnvelope = null;
             IEnumIDs ids = featureSelection.SelectionSet.IDs;
-            int oid = ids.Next();
-            while (oid != -1)
+            try
             {
-                IFeature selectedFeature = featureClass.GetFeature(oid);
-                if (selectedFeature != null && selectedFeature.Shape != null && !selectedFeature.Shape.IsEmpty)
+                int oid;
+                while ((oid = ids.Next()) != -1)
                 {
-                    if (selectionEnvelope == null)
-                        selectionEnvelope = selectedFeature.Shape.Envelope;
-                    else
-                        selectionEnvelope.Union(selectedFeature.Shape.Envelope);
+                    IFeature selectedFeature = featureClass.GetFeature(oid);
+                    try
+                    {
+                        IGeometry shape = selectedFeature.ShapeCopy;
+                        if (shape == null || shape.IsEmpty)
+                            continue;
+                        IEnvelope envelope = shape.Envelope;
+                        if (selectionEnvelope == null)
+                            selectionEnvelope = envelope;
+                        else
+                            selectionEnvelope.Union(envelope);
+                    }
+                    finally
+                    {
+                        Marshal.ReleaseComObject(selectedFeature);
+                    }
                 }
-                oid = ids.Next();
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(ids);
             }
 
             if (selectionEnvelope != null && !selectionEnvelope.IsEmpty)
@@ -1012,21 +932,25 @@ private void btnSearch_Click(object sender, EventArgs e)
         Dictionary<string, int> counts = new Dictionary<string, int>();
 
         ISelectionSet selSet = featSel.SelectionSet;
-        ICursor cursor;
-        selSet.Search(null, true, out cursor);
-        IFeatureCursor fCursor = cursor as IFeatureCursor;
-        IFeature feature = fCursor.NextFeature();
-
-        while (feature != null)
+        ICursor cursor = null;
+        try
         {
-            object val = feature.get_Value(fieldIndex);
-            string key = (val == null || val == DBNull.Value) ? "(空)" : val.ToString();
-
-            if (!counts.ContainsKey(key))
-                counts[key] = 0;
-            counts[key]++;
-
-            feature = fCursor.NextFeature();
+            selSet.Search(null, true, out cursor);
+            IFeatureCursor fCursor = (IFeatureCursor)cursor;
+            IFeature feature;
+            while ((feature = fCursor.NextFeature()) != null)
+            {
+                object val = feature.get_Value(fieldIndex);
+                string key = (val == null || val == DBNull.Value) ? "(空)" : val.ToString();
+                if (!counts.ContainsKey(key))
+                    counts[key] = 0;
+                counts[key]++;
+            }
+        }
+        finally
+        {
+            if (cursor != null)
+                Marshal.ReleaseComObject(cursor);
         }
 
         if (counts.Count == 0)
@@ -1060,7 +984,7 @@ private void btnSearch_Click(object sender, EventArgs e)
             chart.ChartAreas[0].AxisX.Interval = 1;
         }
 
-        _statsForm.Text = "统计图表 - 图层：{layer.Name}，字段：{fieldName}";
+        _statsForm.Text = string.Format("统计图表 - 图层：{0}，字段：{1}", layer.Name, fieldName);
     }
     catch (Exception ex)
     {
@@ -1328,109 +1252,98 @@ private void btnSearch_Click(object sender, EventArgs e)
                 }
 
                 dgv.DataSource = _items;
-            }
-        }
-
-
-private void btnBuffer_Click(object sender, EventArgs e)
-{
-    // 步骤 1: 准备工作，清除上一次的图形
-    IMap map = axMapControl1.Map;
-    IActiveView activeView = (IActiveView)map;
-    IGraphicsContainer graphicsContainer = (IGraphicsContainer)map;
-
-    graphicsContainer.DeleteAllElements();
-    _lastBufferGeometry = null;
-    activeView.PartialRefresh(esriViewDrawPhase.esriViewGraphics, null, null);
-
-    try
-    {
-        // 步骤 2: 检查是否至少选中一个要素
-        IFeatureSelection featureSelection = map.FeatureSelection as IFeatureSelection;
-        if (featureSelection == null || featureSelection.SelectionSet.Count == 0)
-        {
-            MessageBox.Show("请先在地图上选择至少一个要素。", "缓冲区提示",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        // 步骤 3: 合并所有选中要素的几何图形
-        IGeometryCollection geometryCollection = new GeometryBagClass();
-        ((IGeometry)geometryCollection).SpatialReference = map.SpatialReference;
-
-        ISelectionSet selectionSet = featureSelection.SelectionSet;
-        ICursor cursor;
-        selectionSet.Search(null, false, out cursor);
-        IFeatureCursor featureCursor = (IFeatureCursor)cursor;
-
-        IFeature feature;
-        while ((feature = featureCursor.NextFeature()) != null)
-        {
-            if (feature.Shape != null && !feature.Shape.IsEmpty)
-            {
-                IGeometry tempGeom = (IGeometry)((IClone)feature.Shape).Clone();
-                // 检查并统一坐标系
-                if (tempGeom.SpatialReference != null && map.SpatialReference != null && tempGeom.SpatialReference.FactoryCode != map.SpatialReference.FactoryCode)
+                btnOk.Click += delegate
                 {
-                    tempGeom.Project(map.SpatialReference);
-                }
-                geometryCollection.AddGeometry(tempGeom);
+                    dgv.EndEdit();
+                    BindingContext[_items].EndCurrentEdit();
+                };
             }
         }
-        System.Runtime.InteropServices.Marshal.ReleaseComObject(cursor);
 
-        if (geometryCollection.GeometryCount == 0)
+
+        private static IGeometry BuildSelectionBuffer(IMap map, double distance, out int count)
         {
-            MessageBox.Show("选中的所有要素都没有有效的几何形状。", "缓冲区警告",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
+            count = 0;
+            if (map.SelectionCount == 0)
+                throw new InvalidOperationException("请先在地图上选择至少一个要素。");
+            IEnumFeature features = (IEnumFeature)map.FeatureSelection;
+            IGeometryCollection buffers = new GeometryBagClass();
+            ISpatialReference spatialReference = map.SpatialReference;
+            try
+            {
+                features.Reset();
+                IFeature feature;
+                while ((feature = features.Next()) != null)
+                {
+                    IGeometry shape = feature.ShapeCopy;
+                    if (shape == null || shape.IsEmpty)
+                        continue;
+                    if (spatialReference != null && !(spatialReference is IUnknownCoordinateSystem))
+                    {
+                        if (shape.SpatialReference == null || shape.SpatialReference is IUnknownCoordinateSystem)
+                            throw new InvalidOperationException("选中要素缺少坐标系，无法统一缓冲距离。");
+                        shape.Project(spatialReference);
+                    }
+                    IGeometry buffer = ((ITopologicalOperator)shape).Buffer(distance);
+                    if (buffer != null && !buffer.IsEmpty)
+                    {
+                        buffers.AddGeometry(buffer);
+                        count++;
+                    }
+                }
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(features);
+            }
+            if (count == 0)
+                throw new InvalidOperationException("选中的要素没有可用于缓冲的有效几何。");
+            ITopologicalOperator result = new PolygonClass();
+            ((IGeometry)result).SpatialReference = spatialReference;
+            result.ConstructUnion((IEnumGeometry)buffers);
+            return (IGeometry)result;
         }
-        
-        // 创建所有几何的联合体
-        ITopologicalOperator unionedGeomOperator = new PolygonClass();
-        unionedGeomOperator.ConstructUnion((IEnumGeometry)geometryCollection);
 
-        // 步骤 4: 对合并后的几何进行缓冲
-        IGeometry geomToBuffer = (IGeometry)unionedGeomOperator;
-        ITopologicalOperator bufferOperator = (ITopologicalOperator)geomToBuffer;
-        if (!bufferOperator.IsSimple)
+        private void btnBuffer_Click(object sender, EventArgs e)
         {
-            bufferOperator.Simplify();
+            try
+            {
+                IMap map = axMapControl1.Map;
+                int count;
+                IGeometry buffer = BuildSelectionBuffer(map, 500.0, out count);
+                IGraphicsContainer graphics = (IGraphicsContainer)map;
+                IElement element = new PolygonElementClass();
+                element.Geometry = buffer;
+                ((IFillShapeElement)element).Symbol = new SimpleFillSymbolClass
+                {
+                    Color = new RgbColorClass { Red = 255, Green = 180, Blue = 180, Transparency = 255 },
+                    Style = esriSimpleFillStyle.esriSFSSolid,
+                    Outline = new SimpleLineSymbolClass
+                    {
+                        Color = new RgbColorClass { Red = 255, Green = 0, Blue = 0, Transparency = 255 },
+                        Width = 1.5
+                    }
+                };
+                if (_bufferElement != null)
+                {
+                    // 用户也可能通过工具条删除过图形。
+                    try { graphics.DeleteElement(_bufferElement); }
+                    catch (COMException) { }
+                }
+                graphics.AddElement(element, 0);
+                _bufferElement = element;
+                _lastBufferGeometry = buffer;
+                axMapControl1.ActiveView.Extent = buffer.Envelope;
+                axMapControl1.ActiveView.Refresh();
+                MessageBox.Show(string.Format("已为选中的 {0} 个要素生成统一缓冲区。", count), "缓冲区成功",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("缓冲区分析失败：\n" + ex.Message, "缓冲区",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
-
-        double bufferDistance = 500.0;
-        IGeometry bufferGeom = bufferOperator.Buffer(bufferDistance);
-
-        if (bufferGeom == null || bufferGeom.IsEmpty)
-        {
-            MessageBox.Show("缓冲区生成失败。", "缓冲区错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
-        }
-
-        // 步骤 5: 绘制缓冲区并刷新地图
-        IRgbColor fillColor = new RgbColorClass { Red = 255, Green = 0, Blue = 0, Transparency = 150 };
-        IRgbColor outlineColor = new RgbColorClass { Red = 255, Green = 0, Blue = 0, Transparency = 0 };
-        ISimpleLineSymbol outline = new SimpleLineSymbolClass { Color = outlineColor, Width = 1.5 };
-        ISimpleFillSymbol fillSymbol = new SimpleFillSymbolClass { Color = fillColor, Style = esriSimpleFillStyle.esriSFSSolid, Outline = outline };
-
-        IElement element = new PolygonElementClass();
-        element.Geometry = bufferGeom;
-        ((IFillShapeElement)element).Symbol = fillSymbol;
-        graphicsContainer.AddElement(element, 0);
-
-        activeView.Extent = bufferGeom.Envelope;
-        activeView.Refresh();
-
-        _lastBufferGeometry = bufferGeom;
-
-        MessageBox.Show("已为选中的 {geometryCollection.GeometryCount} 个要素生成了统一的缓冲区。", "缓冲区成功", 
-            MessageBoxButtons.OK, MessageBoxIcon.Information);
-    }
-    catch (Exception ex)
-    {
-        MessageBox.Show("缓冲区分析时发生严重错误：\n" + ex.Message, "缓冲区错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-    }
-}
 
         private void btnSelectByBuffer_Click(object sender, EventArgs e)
         {
@@ -1651,6 +1564,98 @@ private void btnBuffer_Click(object sender, EventArgs e)
             }
         }
 
+        private static void RunEditOperation(IWorkspaceEdit edit, Action action)
+        {
+            bool startedHere = false;
+            bool operationStarted = false;
+            IWorkspaceEdit2 edit2 = edit as IWorkspaceEdit2;
+            if (edit2 != null && edit2.IsInEditOperation)
+                throw new InvalidOperationException("已有编辑操作正在进行，请先完成该操作。");
+            try
+            {
+                if (!edit.IsBeingEdited())
+                {
+                    edit.StartEditing(true);
+                    startedHere = true;
+                }
+                edit.StartEditOperation();
+                operationStarted = true;
+                action();
+                edit.StopEditOperation();
+                operationStarted = false;
+                if (startedHere)
+                    edit.StopEditing(true);
+            }
+            catch
+            {
+                try
+                {
+                    if (operationStarted)
+                        edit.AbortEditOperation();
+                }
+                finally
+                {
+                    if (startedHere && edit.IsBeingEdited())
+                        edit.StopEditing(false);
+                }
+                throw;
+            }
+        }
+
+        private static object ParseFieldValue(IField field, string text)
+        {
+            if (field.Type == esriFieldType.esriFieldTypeString)
+            {
+                if (field.Length > 0 && text.Length > field.Length)
+                    throw new ArgumentException("字段 " + field.Name + " 最多允许 " + field.Length + " 个字符。");
+                return text;
+            }
+            if (string.IsNullOrWhiteSpace(text) && field.IsNullable)
+                return DBNull.Value;
+            switch (field.Type)
+            {
+                case esriFieldType.esriFieldTypeSmallInteger:
+                    return short.Parse(text, CultureInfo.CurrentCulture);
+                case esriFieldType.esriFieldTypeInteger:
+                    return int.Parse(text, CultureInfo.CurrentCulture);
+                case esriFieldType.esriFieldTypeSingle:
+                case esriFieldType.esriFieldTypeDouble:
+                    double number;
+                    if ((!double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out number) &&
+                         !double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number)) ||
+                        double.IsNaN(number) || double.IsInfinity(number) ||
+                        (field.Type == esriFieldType.esriFieldTypeSingle && Math.Abs(number) > float.MaxValue))
+                        throw new ArgumentException("字段 " + field.Name + " 需要有效数值。");
+                    return number;
+                case esriFieldType.esriFieldTypeDate:
+                    return DateTime.Parse(text, CultureInfo.CurrentCulture);
+                default:
+                    throw new NotSupportedException("暂不支持编辑字段类型：" + field.Type);
+            }
+        }
+
+        private static IGeometry PreparePointGeometry(IFeatureClass featureClass, IPoint mapPoint)
+        {
+            IPoint point = (IPoint)((IClone)mapPoint).Clone();
+            ISpatialReference target = ((IGeoDataset)featureClass).SpatialReference;
+            bool sourceKnown = point.SpatialReference != null && !(point.SpatialReference is IUnknownCoordinateSystem);
+            bool targetKnown = target != null && !(target is IUnknownCoordinateSystem);
+            if (sourceKnown != targetKnown)
+                throw new InvalidOperationException("地图与点图层的坐标系信息不完整，请先定义坐标系。");
+            if (sourceKnown)
+                point.Project(target);
+            if (featureClass.ShapeType == esriGeometryType.esriGeometryPoint)
+                return point;
+            if (featureClass.ShapeType == esriGeometryType.esriGeometryMultipoint)
+            {
+                IPointCollection points = new MultipointClass();
+                points.AddPoint(point);
+                ((IGeometry)points).SpatialReference = target;
+                return (IGeometry)points;
+            }
+            throw new InvalidOperationException("请选择点或多点图层。");
+        }
+
         private void btnEdit_Click(object sender, EventArgs e)
         {
             try
@@ -1754,87 +1759,36 @@ private void btnBuffer_Click(object sender, EventArgs e)
                     return;
                 }
 
-                bool startedHere = false;
-                if (!workspaceEdit.IsBeingEdited())
-                {
-                    workspaceEdit.StartEditing(false);
-                    workspaceEdit.StartEditOperation();
-                    startedHere = true;
-                }
-                else
-                {
-                    workspaceEdit.StartEditOperation();
-                }
-
-                // 5. 遍历选中要素，按字段类型把字符串转换成合适类型后写入
-                ISelectionSet selSet = featSel.SelectionSet;
-                ICursor cursor;
-                selSet.Search(null, false, out cursor);
-                IFeatureCursor fCursor = cursor as IFeatureCursor;
-                IFeature feature = fCursor.NextFeature();
-
+                object newValue = ParseFieldValue(targetField, newValueStr);
                 int editedCount = 0;
-
-                while (feature != null)
+                RunEditOperation(workspaceEdit, delegate
                 {
-                    object newValObj = null;
-
-                    switch (targetField.Type)
+                    ICursor cursor = null;
+                    try
                     {
-                        case esriFieldType.esriFieldTypeString:
-                            newValObj = newValueStr;
-                            break;
-                        case esriFieldType.esriFieldTypeInteger:
-                        case esriFieldType.esriFieldTypeSmallInteger:
-                            int intVal;
-                            if (int.TryParse(newValueStr, out intVal))
-                                newValObj = intVal;
-                            else
+                        featSel.SelectionSet.Search(null, false, out cursor);
+                        IFeatureCursor features = (IFeatureCursor)cursor;
+                        IFeature feature;
+                        while ((feature = features.NextFeature()) != null)
+                        {
+                            try
                             {
-                                // 如果解析失败，就不修改这个要素
-                                feature = fCursor.NextFeature();
-                                continue;
+                                feature.set_Value(fieldIndex, newValue);
+                                feature.Store();
+                                editedCount++;
                             }
-                            break;
-                        case esriFieldType.esriFieldTypeDouble:
-                        case esriFieldType.esriFieldTypeSingle:
-                            double dblVal;
-                            if (double.TryParse(newValueStr, out dblVal))
-                                newValObj = dblVal;
-                            else
+                            finally
                             {
-                                feature = fCursor.NextFeature();
-                                continue;
+                                Marshal.ReleaseComObject(feature);
                             }
-                            break;
-                        case esriFieldType.esriFieldTypeDate:
-                            DateTime dtVal;
-                            if (DateTime.TryParse(newValueStr, out dtVal))
-                                newValObj = dtVal;
-                            else
-                            {
-                                feature = fCursor.NextFeature();
-                                continue;
-                            }
-                            break;
-                        default:
-                            // 其他类型暂不支持，跳过
-                            feature = fCursor.NextFeature();
-                            continue;
+                        }
                     }
-
-                    feature.set_Value(fieldIndex, newValObj);
-                    feature.Store();
-                    editedCount++;
-
-                    feature = fCursor.NextFeature();
-                }
-
-                workspaceEdit.StopEditOperation();
-                if (startedHere)
-                {
-                    workspaceEdit.StopEditing(true);
-                }
+                    finally
+                    {
+                        if (cursor != null)
+                            Marshal.ReleaseComObject(cursor);
+                    }
+                });
 
                 IActiveView activeView = axMapControl1.ActiveView;
                 activeView.PartialRefresh(esriViewDrawPhase.esriViewGeography, null, null);
@@ -1876,6 +1830,8 @@ private void btnBuffer_Click(object sender, EventArgs e)
             }
 
             // 标记进入新增模式
+            _isSettingRoutePoints = false;
+            axMapControl1.CurrentTool = null;
             _isAddingPoint = true;
 
             MessageBox.Show("请在地图上单击位置来创建一个新点要素。", "新增点",
@@ -2164,6 +2120,12 @@ private void btnBuffer_Click(object sender, EventArgs e)
 
         private void btnRoute_Click(object sender, EventArgs e)
         {
+            if (!Program.NetworkAnalysisAvailable)
+            {
+                MessageBox.Show("Network Analyst 扩展许可不可用。", "路径分析",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             // 初始化 NAContext
             if (!InitNetworkAnalysis())
                 return;
@@ -2187,6 +2149,8 @@ private void btnBuffer_Click(object sender, EventArgs e)
             _routeStartSet = false;
             _routeStartPoint = null;
             _routeEndPoint = null;
+            _isAddingPoint = false;
+            axMapControl1.CurrentTool = null;
             _isSettingRoutePoints = true;
 
             MessageBox.Show("请在地图上点击起点，然后再点击终点。", "路径分析",

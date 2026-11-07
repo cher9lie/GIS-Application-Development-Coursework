@@ -99,6 +99,7 @@ namespace GISDev4
         private void toolStripButton3_Click(object sender, System.EventArgs e)
         {
             m_BasicOperationTool = "isZoomFull";
+            axMapControl1.CurrentTool = null;
             axMapControl1.Extent = axMapControl1.FullExtent;
             axMapControl1.MousePointer = ESRI.ArcGIS.Controls.esriControlsMousePointer.esriPointerZoom;
         }
@@ -106,18 +107,21 @@ namespace GISDev4
         private void toolStripButton4_Click(object sender, System.EventArgs e)
         {
             m_BasicOperationTool = "isZoomIn";
+            axMapControl1.CurrentTool = null;
             axMapControl1.MousePointer = ESRI.ArcGIS.Controls.esriControlsMousePointer.esriPointerZoomIn;
         }
 
         private void toolStripButton5_Click(object sender, System.EventArgs e)
         {
             m_BasicOperationTool = "isZoomOut";
+            axMapControl1.CurrentTool = null;
             axMapControl1.MousePointer = ESRI.ArcGIS.Controls.esriControlsMousePointer.esriPointerZoomOut;
         }
 
         private void toolStripButton6_Click(object sender, System.EventArgs e)
         {
             m_BasicOperationTool = "isZoomPan";
+            axMapControl1.CurrentTool = null;
             axMapControl1.MousePointer = ESRI.ArcGIS.Controls.esriControlsMousePointer.esriPointerPan;
         }
 
@@ -131,21 +135,21 @@ switch (m_BasicOperationTool)
 {
     case "isZoomIn":
         objEnvelope = axMapControl1.TrackRectangle();
+        if (objEnvelope == null || objEnvelope.IsEmpty || objEnvelope.Width <= 0 || objEnvelope.Height <= 0)
+            return;
         axMapControl1.Extent = objEnvelope;
         break;
     case "isZoomOut":
         objEnvelope = axMapControl1.TrackRectangle();
-        double mapWidth = objEnvelope.Width;
-        double mapHeight = objEnvelope.Height;
-        double x1 = pPoint.X - mapWidth;
-        double x2 = pPoint.X + mapWidth;
-        double y1 = pPoint.Y - mapHeight;
-        double y2 = pPoint.Y + mapHeight;
-        objEnvelope.XMax = x2 + mapWidth * 2;
-        objEnvelope.XMin = x1 - mapWidth * 2;
-        objEnvelope.YMax = y2 + mapHeight * 2;
-        objEnvelope.YMin = y1 - mapHeight * 2;
-        axMapControl1.Extent = objEnvelope;
+        if (objEnvelope == null || objEnvelope.IsEmpty || objEnvelope.Width <= 0 || objEnvelope.Height <= 0)
+            return;
+        IEnvelope currentExtent = axMapControl1.Extent;
+        double scale = Math.Max(currentExtent.Width / objEnvelope.Width, currentExtent.Height / objEnvelope.Height);
+        pPoint.PutCoords((objEnvelope.XMin + objEnvelope.XMax) / 2,
+            (objEnvelope.YMin + objEnvelope.YMax) / 2);
+        currentExtent.CenterAt(pPoint);
+        currentExtent.Expand(Math.Max(1.5, scale), Math.Max(1.5, scale), true);
+        axMapControl1.Extent = currentExtent;
         break;
     case "isZoomPan":
         axMapControl1.Pan();
@@ -192,6 +196,7 @@ switch (m_BasicOperationTool)
 
         private void toolStripButton8_Click(object sender, System.EventArgs e)
         {
+            m_BasicOperationTool = "";
             axMapControl1.CurrentTool = null;
             ControlsSelectFeaturesTool pTool = new ControlsSelectFeaturesToolClass();
             pTool.OnCreate(axMapControl1.Object);
@@ -273,23 +278,16 @@ switch (m_BasicOperationTool)
 
         private void axMapControl2_OnMouseDown(object sender, IMapControlEvents2_OnMouseDownEvent e)
         {
-            if (e.button == 2) // 右键
+            if (e.button == 1 && axMapControl1.LayerCount > 0)
             {
-                esriTOCControlItem item = esriTOCControlItem.esriTOCControlItemNone;
-                IBasicMap map = null;
-                ILayer layer = null;
-                object other = null;
-                object index = null;
-
-                // 判断点到了什么
-                axTOCControl1.HitTest(e.x, e.y, ref item, ref map, ref layer, ref other, ref index);
-
-                // 如果点到的是图层
-                if (item == esriTOCControlItem.esriTOCControlItemLayer)
-                {
-                    _selectedLayer = layer; // 记录下来！
-                    contextMenuStrip1.Show(axTOCControl1, e.x, e.y); // 弹出菜单
-                }
+                IEnvelope extent = axMapControl1.Extent;
+                IPoint center = new PointClass();
+                center.PutCoords(e.mapX, e.mapY);
+                center.SpatialReference = axMapControl1.SpatialReference;
+                extent.CenterAt(center);
+                axMapControl1.Extent = extent;
+                axMapControl1.ActiveView.Refresh();
+                return;
             }
         }
 
@@ -323,31 +321,35 @@ switch (m_BasicOperationTool)
             // 3. 填充数据 (行)
             // 使用游标 (Cursor) 遍历所有要素
             IFeatureCursor pFeatureCursor = pFeatureClass.Search(null, false);
-            IFeature pFeature = pFeatureCursor.NextFeature();
-
-            while (pFeature != null)
+            try
             {
-                DataRow pDataRow = pDataTable.NewRow();
+                IFeature pFeature = pFeatureCursor.NextFeature();
 
-                // 遍历该要素的每一个字段
-                for (int i = 0; i < pFeatureClass.Fields.FieldCount; i++)
+                while (pFeature != null)
                 {
-                    IField pField = pFeatureClass.Fields.get_Field(i);
-                    // 同样排除几何字段
-                    if (pField.Type != esriFieldType.esriFieldTypeGeometry)
+                    DataRow pDataRow = pDataTable.NewRow();
+
+                    // 遍历该要素的每一个字段
+                    for (int i = 0; i < pFeatureClass.Fields.FieldCount; i++)
                     {
-                        // 获取字段值并转为字符串
-                        object value = pFeature.get_Value(i);
-                        pDataRow[pField.Name] = (value == null) ? "" : value.ToString();
+                        IField pField = pFeatureClass.Fields.get_Field(i);
+                        // 同样排除几何字段
+                        if (pField.Type != esriFieldType.esriFieldTypeGeometry)
+                        {
+                            // 获取字段值并转为字符串
+                            object value = pFeature.get_Value(i);
+                            pDataRow[pField.Name] = (value == null) ? "" : value.ToString();
+                        }
                     }
+
+                    pDataTable.Rows.Add(pDataRow);
+                    pFeature = pFeatureCursor.NextFeature(); // 移动到下一条
                 }
-
-                pDataTable.Rows.Add(pDataRow);
-                pFeature = pFeatureCursor.NextFeature(); // 移动到下一条
             }
-
-            // 4. 释放游标 (非常重要，否则会锁死文件)
-            System.Runtime.InteropServices.Marshal.ReleaseComObject(pFeatureCursor);
+            finally
+            {
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(pFeatureCursor);
+            }
 
             return pDataTable;
         }

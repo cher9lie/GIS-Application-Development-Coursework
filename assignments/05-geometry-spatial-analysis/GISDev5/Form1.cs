@@ -285,6 +285,11 @@ namespace GISDev5
             try
             {
                 pConstructPoint.ConstructAngleIntersection(pPointA, rad1, pPointB, rad2);
+                if (pFirePoint.IsEmpty)
+                {
+                    MessageBox.Show("这两个方向没有唯一交点，请调整角度。");
+                    return;
+                }
             }
             catch
             {
